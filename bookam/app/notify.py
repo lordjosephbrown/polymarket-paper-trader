@@ -21,13 +21,18 @@ def _booking_context(conn: sqlite3.Connection, booking_id: int) -> tuple[sqlite3
 def booking_confirmed(conn: sqlite3.Connection, wa: WhatsAppClient, booking_id: int) -> None:
     """Tell the business a paid booking just landed."""
     booking, business = _booking_context(conn, booking_id)
+    where = ""
+    if booking["venue"] == "customer":
+        where = f"\n🏠 Home visit: {booking['customer_address']}"
+        if float(booking["travel_fee_ghs"]):
+            where += f" (travel fee GHS {booking['travel_fee_ghs']:g} included)"
     wa.send_text(
         conn,
         business["phone"],
         f"🎉 New booking: {booking['service_name']} on {booking['date']} at "
         f"{booking['start_time']} for {booking['customer_name']} "
         f"({booking['customer_phone']}). Deposit GHS {booking['deposit_ghs']:g} paid. "
-        f"Ref {booking['payment_ref']}.",
+        f"Ref {booking['payment_ref']}.{where}",
     )
 
 

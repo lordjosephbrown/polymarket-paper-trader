@@ -11,7 +11,13 @@ lock it. No-shows drop, and the deposit is the business's to keep.
 
 - **Business signup** with phone + password — no email needed
 - **Services** with duration, full price, and deposit amount
-- **Working hours** per weekday; closed days have no slots
+- **Multiple locations/branches** — each branch has its own hours and its own calendar;
+  customers pick the branch when booking (web and WhatsApp)
+- **Home service / mobile businesses** — a service can happen at the shop, at the
+  customer's place, or either. Home visits capture the customer's address and add a
+  configurable travel/callout fee to the deposit
+- **Public directory** at `/discover` — customers find businesses by name, category, or area
+- **Working hours** per weekday per branch; closed days have no slots
 - **Public booking page** at `/b/<slug>` — mobile-first, made to be opened from WhatsApp
 - **Live slot availability** — double-bookings are impossible; unpaid holds lapse after 15 min
 - **Paystack deposits** (mobile money + card, GHS) with a zero-config demo mode

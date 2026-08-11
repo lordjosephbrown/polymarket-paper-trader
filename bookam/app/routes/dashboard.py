@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from .. import db as dbmod
 from ..config import Settings
 from ..main import current_business, get_conn, get_settings, login_redirect, templates
 
@@ -113,20 +114,26 @@ def add_service(
     duration_min: int = Form(...),
     price_ghs: float = Form(...),
     deposit_ghs: float = Form(...),
+    venue: str = Form("business"),
+    travel_fee_ghs: float = Form(0),
     business: sqlite3.Row | None = Depends(current_business),
     conn: sqlite3.Connection = Depends(get_conn),
 ):
     if business is None:
         return login_redirect()
+    if venue == "business":
+        travel_fee_ghs = 0
     error = None
     if not name.strip():
         error = "Service name is required."
     elif duration_min < 5 or duration_min > 480:
         error = "Duration must be between 5 minutes and 8 hours."
-    elif price_ghs < 0 or deposit_ghs < 0:
-        error = "Price and deposit cannot be negative."
+    elif price_ghs < 0 or deposit_ghs < 0 or travel_fee_ghs < 0:
+        error = "Price, deposit and travel fee cannot be negative."
     elif deposit_ghs > price_ghs:
         error = "Deposit cannot be more than the full price."
+    elif venue not in dbmod.VENUES:
+        error = "Choose where this service happens."
     if error:
         services = conn.execute(
             "SELECT * FROM services WHERE business_id = ? AND active = 1 ORDER BY id",
@@ -139,9 +146,9 @@ def add_service(
             status_code=400,
         )
     conn.execute(
-        "INSERT INTO services (business_id, name, duration_min, price_ghs, deposit_ghs)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (business["id"], name.strip(), duration_min, price_ghs, deposit_ghs),
+        "INSERT INTO services (business_id, name, duration_min, price_ghs, deposit_ghs,"
+        " venue, travel_fee_ghs) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (business["id"], name.strip(), duration_min, price_ghs, deposit_ghs, venue, travel_fee_ghs),
     )
     conn.commit()
     return RedirectResponse("/dashboard/services", status_code=303)
@@ -163,16 +170,32 @@ def delete_service(
     return RedirectResponse("/dashboard/services", status_code=303)
 
 
+def _resolve_own_location(
+    conn: sqlite3.Connection, business_id: int, location_id: int | None
+) -> sqlite3.Row | None:
+    if location_id is None:
+        location_id = dbmod.default_location_id(conn, business_id)
+    return conn.execute(
+        "SELECT * FROM locations WHERE id = ? AND business_id = ? AND active = 1",
+        (location_id, business_id),
+    ).fetchone()
+
+
 @router.get("/hours", response_class=HTMLResponse)
 def hours_page(
     request: Request,
+    location_id: int | None = None,
     business: sqlite3.Row | None = Depends(current_business),
     conn: sqlite3.Connection = Depends(get_conn),
 ):
     if business is None:
         return login_redirect()
+    locations = dbmod.active_locations(conn, business["id"])
+    location = _resolve_own_location(conn, business["id"], location_id)
+    if location is None:
+        return RedirectResponse("/dashboard/locations", status_code=303)
     rows = conn.execute(
-        "SELECT * FROM hours WHERE business_id = ?", (business["id"],)
+        "SELECT * FROM hours WHERE location_id = ?", (location["id"],)
     ).fetchall()
     by_day = {row["weekday"]: row for row in rows}
     days = [
@@ -185,7 +208,15 @@ def hours_page(
         for i in range(7)
     ]
     return templates.TemplateResponse(
-        request, "hours.html", {"business": business, "days": days, "error": None}
+        request,
+        "hours.html",
+        {
+            "business": business,
+            "days": days,
+            "error": None,
+            "locations": locations,
+            "location": location,
+        },
     )
 
 
@@ -198,22 +229,82 @@ async def save_hours(
     if business is None:
         return login_redirect()
     form = await request.form()
+    raw_loc = form.get("location_id")
+    location = _resolve_own_location(
+        conn, business["id"], int(str(raw_loc)) if raw_loc else None
+    )
+    if location is None:
+        return RedirectResponse("/dashboard/locations", status_code=303)
     for weekday in range(7):
         enabled = form.get(f"enabled_{weekday}")
         open_t = str(form.get(f"open_{weekday}", "") or "")
         close_t = str(form.get(f"close_{weekday}", "") or "")
         conn.execute(
-            "DELETE FROM hours WHERE business_id = ? AND weekday = ?",
-            (business["id"], weekday),
+            "DELETE FROM hours WHERE location_id = ? AND weekday = ?",
+            (location["id"], weekday),
         )
         if enabled and open_t and close_t and open_t < close_t:
             conn.execute(
-                "INSERT INTO hours (business_id, weekday, open_time, close_time)"
-                " VALUES (?, ?, ?, ?)",
-                (business["id"], weekday, open_t, close_t),
+                "INSERT INTO hours (business_id, location_id, weekday, open_time, close_time)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (business["id"], location["id"], weekday, open_t, close_t),
             )
     conn.commit()
-    return RedirectResponse("/dashboard/hours", status_code=303)
+    return RedirectResponse(f"/dashboard/hours?location_id={location['id']}", status_code=303)
+
+
+@router.get("/locations", response_class=HTMLResponse)
+def locations_page(
+    request: Request,
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    locations = dbmod.active_locations(conn, business["id"])
+    return templates.TemplateResponse(
+        request, "locations.html", {"business": business, "locations": locations, "error": None}
+    )
+
+
+@router.post("/locations", response_class=HTMLResponse)
+def add_location(
+    request: Request,
+    name: str = Form(...),
+    area: str = Form(""),
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    if not name.strip():
+        locations = dbmod.active_locations(conn, business["id"])
+        return templates.TemplateResponse(
+            request,
+            "locations.html",
+            {"business": business, "locations": locations, "error": "Branch name is required."},
+            status_code=400,
+        )
+    dbmod.add_location(conn, business["id"], name=name.strip(), area=area.strip())
+    return RedirectResponse("/dashboard/locations", status_code=303)
+
+
+@router.post("/locations/{location_id}/delete")
+def delete_location(
+    location_id: int,
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    active = dbmod.active_locations(conn, business["id"])
+    if len(active) > 1:  # a business must keep at least one location
+        conn.execute(
+            "UPDATE locations SET active = 0 WHERE id = ? AND business_id = ?",
+            (location_id, business["id"]),
+        )
+        conn.commit()
+    return RedirectResponse("/dashboard/locations", status_code=303)
 
 
 @router.get("/customers", response_class=HTMLResponse)

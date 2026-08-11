@@ -5,7 +5,13 @@
   <h1>✅ Booked!</h1>
   <p class="big">{{ booking['date'] }} at <strong>{{ booking['start_time'] }}</strong></p>
   <p>{{ booking['service_name'] }} with <strong>{{ business['name'] }}</strong>{% if business['location'] %} · {{ business['location'] }}{% endif %}</p>
+  {% if booking['venue'] == 'customer' %}
+  <p>🏠 They'll come to you: <strong>{{ booking['customer_address'] }}</strong></p>
+  {% endif %}
   <div class="receipt">
+    {% if booking['travel_fee_ghs'] %}
+    <div class="muted small"><span>Includes travel fee</span><span>{{ booking['travel_fee_ghs'] | ghs }}</span></div>
+    {% endif %}
     <div><span>Deposit paid</span><span>{{ booking['deposit_ghs'] | ghs }}</span></div>
     <div><span>Balance at appointment</span><span>{{ balance | ghs }}</span></div>
     <div class="muted small"><span>Reference</span><span>{{ booking['payment_ref'] }}</span></div>

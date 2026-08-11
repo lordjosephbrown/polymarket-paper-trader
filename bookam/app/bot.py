@@ -1,12 +1,15 @@
 """WhatsApp booking bot — a conversation state machine.
 
-Customers never leave WhatsApp: services, dates and times are presented as
-native tap-to-select lists, and in live mode the deposit arrives as a MoMo
-approval prompt on their phone (Paystack Charge API). The wa.me deep link a
-business shares pre-fills "book <slug>" so the bot knows who they're booking.
+Customers never leave WhatsApp: services, branches, dates and times are
+presented as native tap-to-select lists, and in live mode the deposit arrives
+as a MoMo approval prompt on their phone (Paystack Charge API). The wa.me deep
+link a business shares pre-fills "book <slug>" so the bot knows who they're
+booking.
 
-States: await_service → await_date → await_time → await_name → await_payment.
-Commands understood at any point: "book <slug>", "cancel", "menu"/"hi"/"start".
+Flow: service → location (if several branches) → venue (shop or home visit,
+if the service offers both) → address (for home visits) → date → time → name
+→ deposit. Commands understood at any point: "book <slug>", "cancel",
+anything else gets the greeting.
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ from .config import Settings
 from .notify import booking_cancelled, booking_confirmed
 from .payments import PaymentError, PaymentProvider, momo_provider_from_phone, new_reference
 from .slots import add_minutes
-from .wa import WhatsAppClient, list_message
+from .wa import WhatsAppClient, buttons_message, list_message
 
 CONVERSATION_TTL_MIN = 60
 
@@ -84,6 +87,12 @@ class Bot:
 
         if state == "await_service" and text.startswith("svc:"):
             self._pick_service(conn, phone, data, business_id, text[4:])
+        elif state == "await_location" and text.startswith("loc:"):
+            self._pick_location(conn, phone, data, business_id, text[4:])
+        elif state == "await_venue" and text.startswith("ven:"):
+            self._pick_venue(conn, phone, data, business_id, text[4:])
+        elif state == "await_address":
+            self._pick_address(conn, phone, data, business_id, text)
         elif state == "await_date" and text.startswith("date:"):
             self._pick_date(conn, phone, data, business_id, text[5:])
         elif state == "await_time" and text.startswith("time:"):
@@ -124,14 +133,14 @@ class Bot:
                 conn, phone, f"{business['name']} hasn't listed any services yet. Check back soon!"
             )
             return
-        rows = [
-            {
-                "id": f"svc:{s['id']}",
-                "title": s["name"][:24],
-                "description": f"GHS {s['price_ghs']:g} · {s['duration_min']} min · deposit GHS {s['deposit_ghs']:g}",
-            }
-            for s in services
-        ]
+        rows = []
+        for s in services:
+            desc = f"GHS {s['price_ghs']:g} · {s['duration_min']} min · deposit GHS {s['deposit_ghs']:g}"
+            if s["venue"] == "customer":
+                desc += " · comes to you"
+            elif s["venue"] == "both":
+                desc += " · shop or home"
+            rows.append({"id": f"svc:{s['id']}", "title": s["name"][:24], "description": desc})
         self.wa.send(
             conn,
             phone,
@@ -156,7 +165,107 @@ class Bot:
         if service is None:
             self._greet(conn, phone)
             return
-        dates = bookable_dates(conn, business_id, service["duration_min"])
+        data["service_id"] = service["id"]
+        locations = dbmod.active_locations(conn, business_id)
+        if len(locations) > 1:
+            rows = [
+                {"id": f"loc:{l['id']}", "title": l["name"][:24], "description": l["area"]}
+                for l in locations
+            ]
+            self.wa.send(
+                conn,
+                phone,
+                list_message("Which branch?", "Choose branch", rows, header="Branches"),
+            )
+            _save_conversation(conn, phone, "await_location", data, business_id)
+            return
+        data["location_id"] = locations[0]["id"] if locations else None
+        self._ask_venue(conn, phone, data, business_id, service)
+
+    def _pick_location(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None, loc_id: str
+    ) -> None:
+        location = conn.execute(
+            "SELECT * FROM locations WHERE id = ? AND business_id = ? AND active = 1",
+            (loc_id, business_id),
+        ).fetchone()
+        service = conn.execute(
+            "SELECT * FROM services WHERE id = ?", (data.get("service_id"),)
+        ).fetchone()
+        if location is None or service is None:
+            self._greet(conn, phone)
+            return
+        data["location_id"] = location["id"]
+        self._ask_venue(conn, phone, data, business_id, service)
+
+    def _ask_venue(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None, service: sqlite3.Row
+    ) -> None:
+        offered = service["venue"]
+        if offered == "both":
+            fee = float(service["travel_fee_ghs"])
+            note = f" (adds GHS {fee:g} travel fee)" if fee else ""
+            self.wa.send(
+                conn,
+                phone,
+                buttons_message(
+                    f"Where should it happen?{note}",
+                    [
+                        {"id": "ven:business", "title": "At the shop"},
+                        {"id": "ven:customer", "title": "At my place"},
+                    ],
+                ),
+            )
+            _save_conversation(conn, phone, "await_venue", data, business_id)
+            return
+        data["venue"] = offered  # "business" or "customer"
+        if offered == "customer":
+            self._ask_address(conn, phone, data, business_id)
+        else:
+            self._show_dates(conn, phone, data, business_id)
+
+    def _pick_venue(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None, choice: str
+    ) -> None:
+        if choice not in {"business", "customer"}:
+            self._greet(conn, phone)
+            return
+        data["venue"] = choice
+        if choice == "customer":
+            self._ask_address(conn, phone, data, business_id)
+        else:
+            self._show_dates(conn, phone, data, business_id)
+
+    def _ask_address(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None
+    ) -> None:
+        self.wa.send_text(
+            conn,
+            phone,
+            "🏠 Where should they come? Send your area and a landmark or GPS address "
+            "(e.g. \"East Legon, near A&C Mall — GA-334-5567\").",
+        )
+        _save_conversation(conn, phone, "await_address", data, business_id)
+
+    def _pick_address(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None, address: str
+    ) -> None:
+        if not address.strip():
+            self.wa.send_text(conn, phone, "Please send your address for the home visit.")
+            return
+        data["address"] = address.strip()
+        self._show_dates(conn, phone, data, business_id)
+
+    def _show_dates(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None
+    ) -> None:
+        service = conn.execute(
+            "SELECT * FROM services WHERE id = ?", (data.get("service_id"),)
+        ).fetchone()
+        if service is None or data.get("location_id") is None:
+            self._greet(conn, phone)
+            return
+        dates = bookable_dates(conn, business_id, data["location_id"], service["duration_min"])
         if not dates:
             self.wa.send_text(
                 conn, phone, "😔 No free slots in the next month. Message the business directly."
@@ -169,7 +278,6 @@ class Bot:
             phone,
             list_message(f"*{service['name']}* — which day suits you?", "Choose day", rows, header="Days"),
         )
-        data["service_id"] = service["id"]
         _save_conversation(conn, phone, "await_date", data, business_id)
 
     def _pick_date(
@@ -178,13 +286,15 @@ class Bot:
         service = conn.execute(
             "SELECT * FROM services WHERE id = ?", (data.get("service_id"),)
         ).fetchone()
-        if service is None:
+        if service is None or data.get("location_id") is None:
             self._greet(conn, phone)
             return
-        slots = available_slots(conn, business_id, service["duration_min"], date_str)
+        slots = available_slots(
+            conn, business_id, data["location_id"], service["duration_min"], date_str
+        )
         if not slots:
             self.wa.send_text(conn, phone, "That day just filled up — pick another one.")
-            self._pick_service(conn, phone, data, business_id, str(service["id"]))
+            self._show_dates(conn, phone, data, business_id)
             return
         rows = [{"id": f"time:{t}", "title": t, "description": ""} for t in slots[:10]]
         self.wa.send(
@@ -201,10 +311,12 @@ class Bot:
         service = conn.execute(
             "SELECT * FROM services WHERE id = ?", (data.get("service_id"),)
         ).fetchone()
-        if service is None or "date" not in data:
+        if service is None or "date" not in data or data.get("location_id") is None:
             self._greet(conn, phone)
             return
-        if time_str not in available_slots(conn, business_id, service["duration_min"], data["date"]):
+        if time_str not in available_slots(
+            conn, business_id, data["location_id"], service["duration_min"], data["date"]
+        ):
             self.wa.send_text(conn, phone, "That time was just taken — here are the free ones:")
             self._pick_date(conn, phone, data, business_id, data["date"])
             return
@@ -222,16 +334,26 @@ class Bot:
         service = conn.execute(
             "SELECT * FROM services WHERE id = ?", (data.get("service_id"),)
         ).fetchone()
-        if service is None or "date" not in data or "time" not in data:
+        if (
+            service is None
+            or "date" not in data
+            or "time" not in data
+            or data.get("location_id") is None
+        ):
             self._greet(conn, phone)
             return
         # Re-check the slot right before charging.
-        if data["time"] not in available_slots(conn, business_id, service["duration_min"], data["date"]):
+        if data["time"] not in available_slots(
+            conn, business_id, data["location_id"], service["duration_min"], data["date"]
+        ):
             self.wa.send_text(conn, phone, "Sorry — that slot was just taken. Let's pick another:")
             self._pick_date(conn, phone, data, business_id, data["date"])
             return
 
-        deposit = float(service["deposit_ghs"])
+        venue = data.get("venue", "business")
+        address = data.get("address", "")
+        travel_fee = float(service["travel_fee_ghs"]) if venue == "customer" else 0.0
+        deposit_total = float(service["deposit_ghs"]) + travel_fee
         end_time = add_minutes(data["time"], int(service["duration_min"]))
 
         if self.payments.demo:
@@ -241,7 +363,7 @@ class Bot:
             provider = momo_provider_from_phone(phone) or "mtn"
             try:
                 reference = self.payments.charge_momo(
-                    amount_ghs=deposit, phone=phone, provider=provider
+                    amount_ghs=deposit_total, phone=phone, provider=provider
                 )
             except PaymentError:
                 self.wa.send_text(
@@ -255,19 +377,24 @@ class Bot:
             status = "pending"
 
         conn.execute(
-            "INSERT INTO bookings (business_id, service_id, customer_name, customer_phone,"
+            "INSERT INTO bookings (business_id, location_id, service_id, venue, customer_address,"
+            " travel_fee_ghs, customer_name, customer_phone,"
             " date, start_time, end_time, status, deposit_ghs, payment_ref, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 business_id,
+                data["location_id"],
                 service["id"],
+                venue,
+                address,
+                travel_fee,
                 name,
                 phone,
                 data["date"],
                 data["time"],
                 end_time,
                 status,
-                deposit,
+                deposit_total,
                 reference,
                 dbmod.now_iso(),
             ),
@@ -285,7 +412,7 @@ class Bot:
             self.wa.send_text(
                 conn,
                 phone,
-                f"📲 Almost there! A GHS {deposit:g} MoMo request was just sent to this "
+                f"📲 Almost there! A GHS {deposit_total:g} MoMo request was just sent to this "
                 "number. Approve it with your PIN and your booking is locked — I'll "
                 "confirm here the moment it lands.",
             )
@@ -295,19 +422,25 @@ class Bot:
     def send_confirmation(self, conn: sqlite3.Connection, phone: str, booking_id: int) -> None:
         b = conn.execute(
             "SELECT b.*, s.name AS service_name, s.price_ghs, biz.name AS business_name,"
-            " biz.location FROM bookings b"
+            " l.name AS location_name, l.area AS location_area FROM bookings b"
             " JOIN services s ON s.id = b.service_id"
-            " JOIN businesses biz ON biz.id = b.business_id WHERE b.id = ?",
+            " JOIN businesses biz ON biz.id = b.business_id"
+            " LEFT JOIN locations l ON l.id = b.location_id WHERE b.id = ?",
             (booking_id,),
         ).fetchone()
-        balance = float(b["price_ghs"]) - float(b["deposit_ghs"])
+        balance = float(b["price_ghs"]) + float(b["travel_fee_ghs"]) - float(b["deposit_ghs"])
+        if b["venue"] == "customer":
+            where = f"🏠 They'll come to you: {b['customer_address']}"
+        else:
+            where = f"📍 {b['location_name']}" + (
+                f", {b['location_area']}" if b["location_area"] else ""
+            )
         self.wa.send_text(
             conn,
             phone,
             f"✅ Booked! {b['service_name']} with {b['business_name']} on "
-            f"{_weekday_label(b['date'])} at {b['start_time']}"
-            + (f" ({b['location']})" if b["location"] else "")
-            + f".\nDeposit paid: GHS {b['deposit_ghs']:g}. Balance at appointment: GHS {balance:g}."
+            f"{_weekday_label(b['date'])} at {b['start_time']}.\n{where}\n"
+            f"Deposit paid: GHS {b['deposit_ghs']:g}. Balance at appointment: GHS {balance:g}."
             f"\nRef: {b['payment_ref']}\nSend \"cancel\" if your plans change.",
         )
 

@@ -4,8 +4,16 @@
 {% block content %}
 <div class="card">
   <h1>Working hours</h1>
+  {% if locations | length > 1 %}
+  <p class="small">Branch:
+    {% for l in locations %}
+    {% if l['id'] == location['id'] %}<strong>{{ l['name'] }}</strong>{% else %}<a href="/dashboard/hours?location_id={{ l['id'] }}">{{ l['name'] }}</a>{% endif %}{% if not loop.last %} · {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
   <p class="muted small">Clients can only book within these hours. Untick a day to close it.</p>
   <form method="post" action="/dashboard/hours">
+    <input type="hidden" name="location_id" value="{{ location['id'] }}">
     {% for d in days %}
     <div class="hours-row">
       <label class="hours-day">

@@ -53,6 +53,34 @@ def _max_date() -> str:
     return (now_utc() + timedelta(days=MAX_DAYS_AHEAD)).strftime("%Y-%m-%d")
 
 
+@router.get("/discover", response_class=HTMLResponse)
+def discover(
+    request: Request,
+    q: str = "",
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    """Public directory: find businesses by name, category, or area."""
+    sql = (
+        "SELECT b.*, COUNT(s.id) AS service_count,"
+        " (SELECT GROUP_CONCAT(l.area, ' · ') FROM locations l"
+        "   WHERE l.business_id = b.id AND l.active = 1 AND l.area != '') AS areas"
+        " FROM businesses b JOIN services s ON s.business_id = b.id AND s.active = 1"
+    )
+    params: list[str] = []
+    if q.strip():
+        like = f"%{q.strip()}%"
+        sql += (
+            " WHERE b.name LIKE ? OR b.category LIKE ? OR b.location LIKE ?"
+            " OR b.id IN (SELECT business_id FROM locations WHERE active = 1 AND area LIKE ?)"
+        )
+        params = [like, like, like, like]
+    sql += " GROUP BY b.id ORDER BY b.created_at DESC LIMIT 50"
+    businesses = conn.execute(sql, params).fetchall()
+    return templates.TemplateResponse(
+        request, "discover.html", {"businesses": businesses, "q": q}
+    )
+
+
 @router.get("/b/{slug}", response_class=HTMLResponse)
 def booking_page(
     request: Request,
@@ -65,6 +93,7 @@ def booking_page(
         "SELECT * FROM services WHERE business_id = ? AND active = 1 ORDER BY id",
         (business["id"],),
     ).fetchall()
+    locations = dbmod.active_locations(conn, business["id"])
     wa_link = ""
     if settings.wa_public_number:
         wa_link = f"https://wa.me/{settings.wa_public_number}?text=book%20{business['slug']}"
@@ -74,6 +103,7 @@ def booking_page(
         {
             "business": business,
             "services": services,
+            "locations": locations,
             "today": now_utc().strftime("%Y-%m-%d"),
             "max_date": _max_date(),
             "wa_link": wa_link,
@@ -81,19 +111,39 @@ def booking_page(
     )
 
 
+def _resolve_location(
+    conn: sqlite3.Connection, business_id: int, location_id: int | None
+) -> sqlite3.Row:
+    if location_id is None:
+        location_id = dbmod.default_location_id(conn, business_id)
+    row = conn.execute(
+        "SELECT * FROM locations WHERE id = ? AND business_id = ? AND active = 1",
+        (location_id, business_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return row
+
+
 @router.get("/b/{slug}/slots")
 def slots_api(
     slug: str,
     service_id: int,
     date: str,
+    location_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_conn),
 ):
     business = _get_business(conn, slug)
     service = _get_service(conn, business["id"], service_id)
+    location = _resolve_location(conn, business["id"], location_id)
     _parse_date(date)
     if date > _max_date():
         return {"slots": []}
-    return {"slots": available_slots(conn, business["id"], service["duration_min"], date)}
+    return {
+        "slots": available_slots(
+            conn, business["id"], location["id"], service["duration_min"], date
+        )
+    }
 
 
 @router.post("/b/{slug}/book", response_class=HTMLResponse)
@@ -105,19 +155,40 @@ def book(
     start_time: str = Form(...),
     customer_name: str = Form(...),
     customer_phone: str = Form(...),
+    location_id: int | None = Form(None),
+    venue: str = Form("business"),
+    customer_address: str = Form(""),
     conn: sqlite3.Connection = Depends(get_conn),
     settings: Settings = Depends(get_settings),
     payments: PaymentProvider = Depends(get_payments),
 ):
     business = _get_business(conn, slug)
     service = _get_service(conn, business["id"], service_id)
+    location = _resolve_location(conn, business["id"], location_id)
     phone_n = normalize_phone(customer_phone)
     if not customer_name.strip() or not PHONE_RE.match(phone_n):
         raise HTTPException(status_code=400, detail="Enter your name and a valid phone number")
     _parse_date(date)
     if date > _max_date():
         raise HTTPException(status_code=400, detail="Date is too far ahead")
-    if start_time not in available_slots(conn, business["id"], service["duration_min"], date):
+
+    # Venue: where the appointment happens, constrained by what the service offers.
+    if venue not in {"business", "customer"}:
+        raise HTTPException(status_code=400, detail="Invalid venue")
+    offered = service["venue"]
+    if (venue == "customer" and offered == "business") or (
+        venue == "business" and offered == "customer"
+    ):
+        raise HTTPException(status_code=400, detail="This service isn't offered there")
+    customer_address = customer_address.strip()
+    if venue == "customer" and not customer_address:
+        raise HTTPException(status_code=400, detail="Enter your address for a home visit")
+    travel_fee = float(service["travel_fee_ghs"]) if venue == "customer" else 0.0
+    deposit_total = float(service["deposit_ghs"]) + travel_fee
+
+    if start_time not in available_slots(
+        conn, business["id"], location["id"], service["duration_min"], date
+    ):
         return templates.TemplateResponse(
             request, "slot_taken.html", {"business": business}, status_code=409
         )
@@ -125,25 +196,30 @@ def book(
     callback_url = f"{settings.base_url}/pay/callback"
     try:
         init = payments.initialize(
-            amount_ghs=float(service["deposit_ghs"]),
+            amount_ghs=deposit_total,
             customer_phone=phone_n,
             callback_url=callback_url,
         )
     except PaymentError:
         raise HTTPException(status_code=502, detail="Payment service unavailable, try again")
     conn.execute(
-        "INSERT INTO bookings (business_id, service_id, customer_name, customer_phone,"
+        "INSERT INTO bookings (business_id, location_id, service_id, venue, customer_address,"
+        " travel_fee_ghs, customer_name, customer_phone,"
         " date, start_time, end_time, status, deposit_ghs, payment_ref, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
         (
             business["id"],
+            location["id"],
             service["id"],
+            venue,
+            customer_address,
+            travel_fee,
             customer_name.strip(),
             phone_n,
             date,
             start_time,
             end_time,
-            float(service["deposit_ghs"]),
+            deposit_total,
             init.reference,
             dbmod.now_iso(),
         ),
@@ -245,7 +321,12 @@ def booking_detail(
     business = conn.execute(
         "SELECT * FROM businesses WHERE id = ?", (booking["business_id"],)
     ).fetchone()
-    balance = float(booking["price_ghs"]) - float(booking["deposit_ghs"])
+    # Total owed = service price + travel fee; the paid deposit already includes the fee.
+    balance = (
+        float(booking["price_ghs"])
+        + float(booking["travel_fee_ghs"])
+        - float(booking["deposit_ghs"])
+    )
     return templates.TemplateResponse(
         request,
         "confirmed.html",

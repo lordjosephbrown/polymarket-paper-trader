@@ -35,6 +35,7 @@ CATEGORIES = [
 
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 templates.env.globals["categories"] = CATEGORIES
+templates.env.globals["category_labels"] = dict(CATEGORIES)
 
 
 def ghs(amount: float) -> str:

@@ -15,12 +15,38 @@
       <select name="service_id" id="service" required>
         <option value="" disabled selected>Select…</option>
         {% for s in services %}
-        <option value="{{ s['id'] }}" data-deposit="{{ s['deposit_ghs'] }}" data-price="{{ s['price_ghs'] }}">
-          {{ s['name'] }} — {{ s['price_ghs'] | ghs }} ({{ s['duration_min'] }} min)
+        <option value="{{ s['id'] }}" data-deposit="{{ s['deposit_ghs'] }}" data-price="{{ s['price_ghs'] }}"
+                data-venue="{{ s['venue'] }}" data-travel="{{ s['travel_fee_ghs'] }}">
+          {{ s['name'] }} — {{ s['price_ghs'] | ghs }} ({{ s['duration_min'] }} min){% if s['venue'] == 'customer' %} · home service{% elif s['venue'] == 'both' %} · shop or home{% endif %}
         </option>
         {% endfor %}
       </select>
     </label>
+
+    {% if locations | length > 1 %}
+    <label>Which branch?
+      <select name="location_id" id="location">
+        {% for l in locations %}
+        <option value="{{ l['id'] }}">{{ l['name'] }}{% if l['area'] %} — {{ l['area'] }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% else %}
+    <input type="hidden" name="location_id" id="location" value="{{ locations[0]['id'] if locations else '' }}">
+    {% endif %}
+
+    <div id="venue-row" hidden>
+      <label>Where should it happen?
+        <select name="venue" id="venue">
+          <option value="business">At the shop</option>
+          <option value="customer">At my place (home visit)</option>
+        </select>
+      </label>
+    </div>
+    <label id="address-row" hidden>Your address (area + landmark or GPS address)
+      <input name="customer_address" id="address" maxlength="200" placeholder="e.g. East Legon, near A&C Mall — GA-334-5567">
+    </label>
+
     <label>Pick a date
       <input type="date" name="date" id="date" required min="{{ today }}" max="{{ max_date }}">
     </label>
@@ -31,6 +57,7 @@
     </label>
     <div id="deposit-note" class="deposit-note" hidden>
       To lock your slot, pay a <strong id="deposit-amt"></strong> deposit now (MoMo or card).
+      <span id="travel-note" hidden> Includes the travel fee for your home visit.</span>
       The balance is paid at your appointment.
     </div>
     <label>Your name
@@ -48,17 +75,49 @@
 
 <script>
 const service = document.getElementById('service');
+const locationEl = document.getElementById('location');
+const venueRow = document.getElementById('venue-row');
+const venueEl = document.getElementById('venue');
+const addressRow = document.getElementById('address-row');
+const addressEl = document.getElementById('address');
 const dateEl = document.getElementById('date');
 const slotEl = document.getElementById('slot');
 const payBtn = document.getElementById('paybtn');
 const depositNote = document.getElementById('deposit-note');
 const depositAmt = document.getElementById('deposit-amt');
+const travelNote = document.getElementById('travel-note');
+
+function fmt(n) { return 'GH₵' + n.toFixed(2).replace(/\.00$/, ''); }
+
+function currentVenue() {
+  const opt = service.selectedOptions[0];
+  if (!opt) return 'business';
+  const offered = opt.dataset.venue;
+  if (offered === 'business') return 'business';
+  if (offered === 'customer') return 'customer';
+  return venueEl.value;
+}
+
+function updateVenueUI() {
+  const opt = service.selectedOptions[0];
+  if (!opt || opt.dataset.venue === undefined) return;
+  const offered = opt.dataset.venue;
+  venueRow.hidden = offered !== 'both';
+  const atHome = currentVenue() === 'customer';
+  addressRow.hidden = !atHome;
+  addressEl.required = atHome;
+  const dep = parseFloat(opt.dataset.deposit) + (atHome ? parseFloat(opt.dataset.travel) : 0);
+  depositAmt.textContent = fmt(dep);
+  travelNote.hidden = !(atHome && parseFloat(opt.dataset.travel) > 0);
+  depositNote.hidden = false;
+}
 
 async function loadSlots() {
   if (!service.value || !dateEl.value) return;
   slotEl.disabled = true;
   slotEl.innerHTML = '<option>Loading…</option>';
-  const res = await fetch(`/b/{{ business['slug'] }}/slots?service_id=${service.value}&date=${dateEl.value}`);
+  const loc = locationEl.value ? `&location_id=${locationEl.value}` : '';
+  const res = await fetch(`/b/{{ business['slug'] }}/slots?service_id=${service.value}&date=${dateEl.value}${loc}`);
   const data = await res.json();
   slotEl.innerHTML = '';
   if (data.slots.length === 0) {
@@ -75,16 +134,9 @@ async function loadSlots() {
   payBtn.disabled = false;
 }
 
-function updateDeposit() {
-  const opt = service.selectedOptions[0];
-  if (opt && opt.dataset.deposit !== undefined) {
-    const dep = parseFloat(opt.dataset.deposit);
-    depositAmt.textContent = 'GH₵' + dep.toFixed(2).replace(/\.00$/, '');
-    depositNote.hidden = false;
-  }
-}
-
-service.addEventListener('change', () => { updateDeposit(); loadSlots(); });
+service.addEventListener('change', () => { updateVenueUI(); loadSlots(); });
+venueEl.addEventListener('change', updateVenueUI);
+locationEl.addEventListener('change', loadSlots);
 dateEl.addEventListener('change', loadSlots);
 </script>
 {% endblock %}

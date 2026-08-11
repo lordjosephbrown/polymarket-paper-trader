@@ -17,15 +17,18 @@ def now_utc() -> datetime:
 def available_slots(
     conn: sqlite3.Connection,
     business_id: int,
+    location_id: int,
     duration_min: int,
     date_str: str,
     now: datetime | None = None,
 ) -> list[str]:
+    """Free start times at one location. Each branch runs its own calendar;
+    home-visit bookings occupy the calendar of the branch that dispatches them."""
     now = now or now_utc()
     day = datetime.strptime(date_str, "%Y-%m-%d")
     hours = conn.execute(
-        "SELECT * FROM hours WHERE business_id = ? AND weekday = ?",
-        (business_id, day.weekday()),
+        "SELECT * FROM hours WHERE location_id = ? AND weekday = ?",
+        (location_id, day.weekday()),
     ).fetchone()
     if hours is None:
         return []
@@ -33,9 +36,9 @@ def available_slots(
     pending_cutoff = (now - timedelta(minutes=PENDING_HOLD_MIN)).isoformat(timespec="seconds")
     busy_rows = conn.execute(
         "SELECT start_time, end_time FROM bookings"
-        " WHERE business_id = ? AND date = ?"
+        " WHERE business_id = ? AND location_id = ? AND date = ?"
         " AND (status = 'confirmed' OR (status = 'pending' AND created_at > ?))",
-        (business_id, date_str, pending_cutoff),
+        (business_id, location_id, date_str, pending_cutoff),
     ).fetchall()
     busy = [(r["start_time"], r["end_time"]) for r in busy_rows]
     return slots_for_date(
@@ -46,6 +49,7 @@ def available_slots(
 def bookable_dates(
     conn: sqlite3.Connection,
     business_id: int,
+    location_id: int,
     duration_min: int,
     days: int = 7,
     now: datetime | None = None,
@@ -55,7 +59,7 @@ def bookable_dates(
     result: list[str] = []
     for offset in range(0, MAX_DAYS_AHEAD + 1):
         date_str = (now + timedelta(days=offset)).strftime("%Y-%m-%d")
-        if available_slots(conn, business_id, duration_min, date_str, now):
+        if available_slots(conn, business_id, location_id, duration_min, date_str, now):
             result.append(date_str)
             if len(result) >= days:
                 break

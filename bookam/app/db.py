@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS businesses (
     created_at TEXT NOT NULL
 );
 
+-- A business has 1..N locations (branches). Every booking belongs to one:
+-- each branch has its own hours and its own calendar.
+CREATE TABLE IF NOT EXISTS locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    name TEXT NOT NULL,                -- "Osu branch"
+    area TEXT NOT NULL DEFAULT '',     -- "Osu, Accra"
+    active INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id),
@@ -27,22 +37,29 @@ CREATE TABLE IF NOT EXISTS services (
     duration_min INTEGER NOT NULL,
     price_ghs REAL NOT NULL,
     deposit_ghs REAL NOT NULL,
+    venue TEXT NOT NULL DEFAULT 'business',  -- business|customer|both
+    travel_fee_ghs REAL NOT NULL DEFAULT 0,  -- callout fee for home visits
     active INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS hours (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id),
+    location_id INTEGER NOT NULL REFERENCES locations(id),
     weekday INTEGER NOT NULL,          -- 0=Monday .. 6=Sunday
     open_time TEXT NOT NULL,           -- "09:00"
     close_time TEXT NOT NULL,          -- "17:00"
-    UNIQUE(business_id, weekday)
+    UNIQUE(location_id, weekday)
 );
 
 CREATE TABLE IF NOT EXISTS bookings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id),
+    location_id INTEGER REFERENCES locations(id),
     service_id INTEGER NOT NULL REFERENCES services(id),
+    venue TEXT NOT NULL DEFAULT 'business',   -- where it happens
+    customer_address TEXT NOT NULL DEFAULT '',-- for home visits
+    travel_fee_ghs REAL NOT NULL DEFAULT 0,
     customer_name TEXT NOT NULL,
     customer_phone TEXT NOT NULL,
     date TEXT NOT NULL,                -- "YYYY-MM-DD"
@@ -80,7 +97,16 @@ CREATE TABLE IF NOT EXISTS wa_outbox (
 
 MIGRATIONS = [
     "ALTER TABLE bookings ADD COLUMN reminded INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE services ADD COLUMN venue TEXT NOT NULL DEFAULT 'business'",
+    "ALTER TABLE services ADD COLUMN travel_fee_ghs REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE bookings ADD COLUMN location_id INTEGER REFERENCES locations(id)",
+    "ALTER TABLE bookings ADD COLUMN venue TEXT NOT NULL DEFAULT 'business'",
+    "ALTER TABLE bookings ADD COLUMN customer_address TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE bookings ADD COLUMN travel_fee_ghs REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE hours ADD COLUMN location_id INTEGER REFERENCES locations(id)",
 ]
+
+VENUES = {"business", "customer", "both"}
 
 def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -146,12 +172,43 @@ def create_business(
         (slug, name, phone, password_hash, category, location, now_iso()),
     )
     biz_id = cur.lastrowid
-    for weekday, open_t, close_t in DEFAULT_HOURS:
-        conn.execute(
-            "INSERT INTO hours (business_id, weekday, open_time, close_time) VALUES (?, ?, ?, ?)",
-            (biz_id, weekday, open_t, close_t),
-        )
+    add_location(conn, biz_id, name="Main location", area=location)
     conn.commit()
     row = conn.execute("SELECT * FROM businesses WHERE id = ?", (biz_id,)).fetchone()
     assert row is not None
     return row
+
+
+def add_location(
+    conn: sqlite3.Connection, business_id: int, *, name: str, area: str = ""
+) -> int:
+    """Create a location with the default weekly hours. Returns the location id."""
+    cur = conn.execute(
+        "INSERT INTO locations (business_id, name, area) VALUES (?, ?, ?)",
+        (business_id, name, area),
+    )
+    location_id = cur.lastrowid
+    for weekday, open_t, close_t in DEFAULT_HOURS:
+        conn.execute(
+            "INSERT INTO hours (business_id, location_id, weekday, open_time, close_time)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (business_id, location_id, weekday, open_t, close_t),
+        )
+    conn.commit()
+    assert location_id is not None
+    return location_id
+
+
+def active_locations(conn: sqlite3.Connection, business_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM locations WHERE business_id = ? AND active = 1 ORDER BY id",
+        (business_id,),
+    ).fetchall()
+
+
+def default_location_id(conn: sqlite3.Connection, business_id: int) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM locations WHERE business_id = ? AND active = 1 ORDER BY id LIMIT 1",
+        (business_id,),
+    ).fetchone()
+    return row["id"] if row else None

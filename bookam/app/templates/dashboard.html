@@ -36,6 +36,7 @@
       <div class="booking-main">
         <strong>{{ b['start_time'] }}–{{ b['end_time'] }}</strong> · {{ b['service_name'] }}<br>
         <span>{{ b['customer_name'] }} · <a href="tel:{{ b['customer_phone'] }}">{{ b['customer_phone'] }}</a></span>
+        {% if b['venue'] == 'customer' %}<br><span class="small">🏠 {{ b['customer_address'] }}</span>{% endif %}
         <span class="badge">{{ b['status'].replace('_', ' ') }}</span>
         <span class="badge badge-money">{{ b['deposit_ghs'] | ghs }} deposit</span>
       </div>
@@ -68,6 +69,7 @@
       <div class="booking-main">
         <strong>{{ b['date'] }} · {{ b['start_time'] }}</strong> · {{ b['service_name'] }}<br>
         <span>{{ b['customer_name'] }} · {{ b['customer_phone'] }}</span>
+        {% if b['venue'] == 'customer' %}<br><span class="small">🏠 {{ b['customer_address'] }}</span>{% endif %}
       </div>
     </li>
     {% endfor %}
