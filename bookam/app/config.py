@@ -17,6 +17,14 @@ class Settings:
     base_url: str = field(default_factory=lambda: os.environ.get("BOOKAM_BASE_URL", "http://localhost:8000").rstrip("/"))
     paystack_secret_key: str = field(default_factory=lambda: os.environ.get("PAYSTACK_SECRET_KEY", ""))
     session_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+    # WhatsApp Business Cloud API (Meta). All empty = WhatsApp demo mode:
+    # the bot still works and messages are recorded in wa_outbox.
+    wa_token: str = field(default_factory=lambda: os.environ.get("WHATSAPP_TOKEN", ""))
+    wa_phone_id: str = field(default_factory=lambda: os.environ.get("WHATSAPP_PHONE_ID", ""))
+    wa_verify_token: str = field(default_factory=lambda: os.environ.get("WHATSAPP_VERIFY_TOKEN", "bookam-verify"))
+    wa_app_secret: str = field(default_factory=lambda: os.environ.get("WHATSAPP_APP_SECRET", ""))
+    # The number customers message, in international format (for wa.me links).
+    wa_public_number: str = field(default_factory=lambda: os.environ.get("WHATSAPP_PUBLIC_NUMBER", ""))
 
     @property
     def demo_payments(self) -> bool:

@@ -61,6 +61,11 @@ def dashboard(
             "stats": stats,
             "welcome": request.query_params.get("welcome"),
             "booking_url": f"{settings.base_url}/b/{business['slug']}",
+            "wa_deep_link": (
+                f"https://wa.me/{settings.wa_public_number}?text=book%20{business['slug']}"
+                if settings.wa_public_number
+                else ""
+            ),
         },
     )
 

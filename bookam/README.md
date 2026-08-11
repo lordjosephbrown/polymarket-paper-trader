@@ -15,6 +15,14 @@ lock it. No-shows drop, and the deposit is the business's to keep.
 - **Public booking page** at `/b/<slug>` — mobile-first, made to be opened from WhatsApp
 - **Live slot availability** — double-bookings are impossible; unpaid holds lapse after 15 min
 - **Paystack deposits** (mobile money + card, GHS) with a zero-config demo mode
+- **Book entirely inside WhatsApp**: a bot walks customers through service → day → time
+  with native tap-to-select lists, then pushes the deposit as a **MoMo approval prompt**
+  on their phone (Paystack Charge API) — they never open a browser
+- **Business notifications on WhatsApp**: new bookings and cancellations arrive as messages
+- **Appointment reminders**: customers get a WhatsApp nudge ~2 hours before their slot
+- **Customer cancellation**: in the chat (send "cancel") or from the receipt page
+- **Paystack server-to-server webhook** (`/pay/webhook`, signature-verified) so payment
+  confirmation doesn't depend on the customer's browser
 - **Dashboard**: today's appointments, upcoming, mark done / no-show, deposit stats
 - **Customer list** with visit counts, no-show history, and one-tap WhatsApp
 
@@ -49,6 +57,26 @@ Set these environment variables:
 | `BOOKAM_BASE_URL` | Public URL of the deployment, e.g. `https://bookam.example.com`. Used in booking links and the Paystack callback. |
 | `BOOKAM_DB` | Optional. Path to the SQLite file (default `~/.bookam/bookam.db`). |
 
+### WhatsApp (optional, but the killer feature)
+
+Booking inside WhatsApp uses Meta's **WhatsApp Business Cloud API**. One-time setup:
+create a Meta Business app with WhatsApp enabled (developers.facebook.com), add a phone
+number, and point the app's webhook at `https://<your-domain>/wa/webhook` using your
+`WHATSAPP_VERIFY_TOKEN`. Then set:
+
+| Variable | Purpose |
+|---|---|
+| `WHATSAPP_TOKEN` | Cloud API access token. |
+| `WHATSAPP_PHONE_ID` | The Cloud API phone number ID messages are sent from. |
+| `WHATSAPP_VERIFY_TOKEN` | Any string; must match the webhook config in Meta. |
+| `WHATSAPP_APP_SECRET` | Meta app secret, used to verify webhook signatures. |
+| `WHATSAPP_PUBLIC_NUMBER` | The number customers message, international format (e.g. `233XXXXXXXXX`). Enables the "Book on WhatsApp" button and dashboard deep link. |
+
+Without these, the bot logic still runs (webhook + outbox) — messages just aren't
+delivered to real phones. In Paystack live mode also configure the webhook URL
+`https://<your-domain>/pay/webhook` in the Paystack dashboard so MoMo charge
+confirmations arrive server-to-server.
+
 ### Deploy with Docker (Render, Railway, Fly.io, or any VPS)
 
 ```bash
@@ -67,6 +95,7 @@ before going live.
 
 ## Roadmap
 
-- SMS/WhatsApp appointment reminders (Arkesel)
 - Per-business Paystack subaccounts so deposits settle straight to each business
+- SMS fallback (Arkesel) for customers not on WhatsApp
+- Password reset via phone OTP; multi-staff calendars
 - Phase 2: orders + invoicing + payment links for product sellers (the commerce toolkit)

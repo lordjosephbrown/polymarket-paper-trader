@@ -12,5 +12,10 @@
   </div>
   <p class="small muted">Show this page when you arrive. Save the link — it's your receipt.</p>
   <a class="btn btn-primary" href="https://wa.me/{{ business['phone'] | replace('+', '') }}?text={{ ('Hi ' ~ business['name'] ~ ', I just booked ' ~ booking['service_name'] ~ ' for ' ~ booking['date'] ~ ' at ' ~ booking['start_time'] ~ '. My reference is ' ~ booking['payment_ref'] ~ '.') | urlquote }}">Message {{ business['name'] }} on WhatsApp</a>
+  {% if booking['status'] == 'confirmed' %}
+  <form method="post" action="/booking/{{ booking['payment_ref'] }}/cancel" style="margin-top:12px">
+    <button class="btn btn-small btn-warn" onclick="return confirm('Cancel this booking? Your deposit is not refunded automatically.')">Cancel booking</button>
+  </form>
+  {% endif %}
 </div>
 {% endblock %}

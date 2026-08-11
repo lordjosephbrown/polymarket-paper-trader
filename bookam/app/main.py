@@ -84,16 +84,35 @@ def login_redirect() -> RedirectResponse:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    app = FastAPI(title="Bookam", docs_url=None, redoc_url=None)
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        import asyncio
+
+        from .reminders import reminder_loop
+
+        task = asyncio.create_task(reminder_loop(settings.db_path, app.state.wa))
+        yield
+        task.cancel()
+
+    app = FastAPI(title="Bookam", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.payments = PaymentProvider(settings.paystack_secret_key)
+
+    from .wa import WhatsAppClient
+
+    app.state.wa = WhatsAppClient(settings.wa_token, settings.wa_phone_id)
     app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
     from .routes.auth_routes import router as auth_router
     from .routes.dashboard import router as dashboard_router
     from .routes.public import router as public_router
+    from .routes.whatsapp import router as whatsapp_router
 
     app.include_router(auth_router)
     app.include_router(dashboard_router)
     app.include_router(public_router)
+    app.include_router(whatsapp_router)
     return app

@@ -5,6 +5,9 @@
   <h1>{{ business['name'] }}</h1>
   {% if business['location'] %}<p class="muted">📍 {{ business['location'] }}</p>{% endif %}
   {% if business['about'] %}<p>{{ business['about'] }}</p>{% endif %}
+  {% if wa_link %}
+  <a class="btn wide" href="{{ wa_link }}">💬 Book on WhatsApp instead</a>
+  {% endif %}
 
   {% if services %}
   <form method="post" action="/b/{{ business['slug'] }}/book" id="bookform">

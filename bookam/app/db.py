@@ -51,12 +51,36 @@ CREATE TABLE IF NOT EXISTS bookings (
     status TEXT NOT NULL DEFAULT 'pending',  -- pending|confirmed|completed|no_show|cancelled
     deposit_ghs REAL NOT NULL,
     payment_ref TEXT UNIQUE,
+    reminded INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_bookings_biz_date ON bookings(business_id, date);
 CREATE INDEX IF NOT EXISTS idx_services_biz ON services(business_id);
+
+-- WhatsApp bot conversation state, keyed by customer phone (wa_id).
+CREATE TABLE IF NOT EXISTS conversations (
+    phone TEXT PRIMARY KEY,
+    business_id INTEGER,
+    state TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
+
+-- Every outbound WhatsApp message. In demo mode this is the only delivery;
+-- in live mode it doubles as an audit log.
+CREATE TABLE IF NOT EXISTS wa_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    to_phone TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE bookings ADD COLUMN reminded INTEGER NOT NULL DEFAULT 0",
+]
 
 def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +92,11 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    for migration in MIGRATIONS:
+        try:
+            conn.execute(migration)
+        except sqlite3.OperationalError:
+            pass  # column already exists (fresh schema or already migrated)
     return conn
 
 

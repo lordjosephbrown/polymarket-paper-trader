@@ -16,6 +16,9 @@
     <a class="btn btn-primary" href="https://wa.me/?text={{ ('Book your appointment with ' ~ business['name'] ~ ' here 👉 ' ~ booking_url) | urlquote }}" target="_blank">Share on WhatsApp</a>
     <button class="btn btn-ghost" onclick="navigator.clipboard.writeText('{{ booking_url }}'); this.textContent='Copied!'">Copy link</button>
   </div>
+  {% if wa_deep_link %}
+  <p class="small muted">Customers can also book entirely inside WhatsApp: share <a href="{{ wa_deep_link }}">this WhatsApp link</a> — it starts a chat that walks them through booking and takes the deposit by MoMo prompt.</p>
+  {% endif %}
 </div>
 
 <div class="stats-row">

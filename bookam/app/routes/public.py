@@ -1,26 +1,28 @@
-"""Public booking flow: business page → pick slot → pay deposit → confirmed."""
+"""Public booking flow: business page → pick slot → pay deposit → confirmed.
+
+Also: customer cancellation and the Paystack server-to-server webhook.
+"""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import db as dbmod
+from ..availability import MAX_DAYS_AHEAD, available_slots, now_utc
+from ..bot import Bot
 from ..config import Settings
 from ..main import get_conn, get_payments, get_settings, templates
+from ..notify import booking_cancelled, booking_confirmed
 from ..payments import PaymentError, PaymentProvider
-from ..slots import add_minutes, slots_for_date
+from ..slots import add_minutes
 from .auth_routes import PHONE_RE, normalize_phone
 
 router = APIRouter()
-
-MAX_DAYS_AHEAD = 30
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)  # Ghana is UTC year-round
 
 
 def _get_business(conn: sqlite3.Connection, slug: str) -> sqlite3.Row:
@@ -47,28 +49,8 @@ def _parse_date(date_str: str) -> datetime:
         raise HTTPException(status_code=400, detail="Invalid date")
 
 
-def _available_slots(
-    conn: sqlite3.Connection, business: sqlite3.Row, service: sqlite3.Row, date_str: str
-) -> list[str]:
-    day = _parse_date(date_str)
-    hours = conn.execute(
-        "SELECT * FROM hours WHERE business_id = ? AND weekday = ?",
-        (business["id"], day.weekday()),
-    ).fetchone()
-    if hours is None:
-        return []
-    # Pending (unpaid) bookings hold their slot for 15 minutes, then lapse.
-    pending_cutoff = (_now() - timedelta(minutes=15)).isoformat(timespec="seconds")
-    busy_rows = conn.execute(
-        "SELECT start_time, end_time FROM bookings"
-        " WHERE business_id = ? AND date = ?"
-        " AND (status = 'confirmed' OR (status = 'pending' AND created_at > ?))",
-        (business["id"], date_str, pending_cutoff),
-    ).fetchall()
-    busy = [(r["start_time"], r["end_time"]) for r in busy_rows]
-    return slots_for_date(
-        hours["open_time"], hours["close_time"], service["duration_min"], busy, date_str, _now()
-    )
+def _max_date() -> str:
+    return (now_utc() + timedelta(days=MAX_DAYS_AHEAD)).strftime("%Y-%m-%d")
 
 
 @router.get("/b/{slug}", response_class=HTMLResponse)
@@ -76,18 +58,26 @@ def booking_page(
     request: Request,
     slug: str,
     conn: sqlite3.Connection = Depends(get_conn),
+    settings: Settings = Depends(get_settings),
 ):
     business = _get_business(conn, slug)
     services = conn.execute(
         "SELECT * FROM services WHERE business_id = ? AND active = 1 ORDER BY id",
         (business["id"],),
     ).fetchall()
-    today = _now().strftime("%Y-%m-%d")
-    max_date = (_now() + timedelta(days=MAX_DAYS_AHEAD)).strftime("%Y-%m-%d")
+    wa_link = ""
+    if settings.wa_public_number:
+        wa_link = f"https://wa.me/{settings.wa_public_number}?text=book%20{business['slug']}"
     return templates.TemplateResponse(
         request,
         "book.html",
-        {"business": business, "services": services, "today": today, "max_date": max_date},
+        {
+            "business": business,
+            "services": services,
+            "today": now_utc().strftime("%Y-%m-%d"),
+            "max_date": _max_date(),
+            "wa_link": wa_link,
+        },
     )
 
 
@@ -101,9 +91,9 @@ def slots_api(
     business = _get_business(conn, slug)
     service = _get_service(conn, business["id"], service_id)
     _parse_date(date)
-    if date > (_now() + timedelta(days=MAX_DAYS_AHEAD)).strftime("%Y-%m-%d"):
+    if date > _max_date():
         return {"slots": []}
-    return {"slots": _available_slots(conn, business, service, date)}
+    return {"slots": available_slots(conn, business["id"], service["duration_min"], date)}
 
 
 @router.post("/b/{slug}/book", response_class=HTMLResponse)
@@ -125,14 +115,11 @@ def book(
     if not customer_name.strip() or not PHONE_RE.match(phone_n):
         raise HTTPException(status_code=400, detail="Enter your name and a valid phone number")
     _parse_date(date)
-    if date > (_now() + timedelta(days=MAX_DAYS_AHEAD)).strftime("%Y-%m-%d"):
+    if date > _max_date():
         raise HTTPException(status_code=400, detail="Date is too far ahead")
-    if start_time not in _available_slots(conn, business, service, date):
+    if start_time not in available_slots(conn, business["id"], service["duration_min"], date):
         return templates.TemplateResponse(
-            request,
-            "slot_taken.html",
-            {"business": business},
-            status_code=409,
+            request, "slot_taken.html", {"business": business}, status_code=409
         )
     end_time = add_minutes(start_time, int(service["duration_min"]))
     callback_url = f"{settings.base_url}/pay/callback"
@@ -165,6 +152,19 @@ def book(
     return RedirectResponse(init.authorization_url, status_code=303)
 
 
+def _confirm_booking(request: Request, conn: sqlite3.Connection, booking: sqlite3.Row) -> bool:
+    """Confirm a pending booking exactly once. Returns True if this call confirmed it."""
+    cur = conn.execute(
+        "UPDATE bookings SET status = 'confirmed' WHERE id = ? AND status = 'pending'",
+        (booking["id"],),
+    )
+    conn.commit()
+    if cur.rowcount == 1:
+        booking_confirmed(conn, request.app.state.wa, booking["id"])
+        return True
+    return False
+
+
 @router.get("/pay/callback", response_class=HTMLResponse)
 def pay_callback(
     request: Request,
@@ -179,11 +179,7 @@ def pay_callback(
         raise HTTPException(status_code=404, detail="Booking not found")
     if booking["status"] == "pending":
         if payments.verify(reference):
-            conn.execute(
-                "UPDATE bookings SET status = 'confirmed' WHERE id = ? AND status = 'pending'",
-                (booking["id"],),
-            )
-            conn.commit()
+            _confirm_booking(request, conn, booking)
         else:
             conn.execute(
                 "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
@@ -194,12 +190,43 @@ def pay_callback(
                 "SELECT * FROM businesses WHERE id = ?", (booking["business_id"],)
             ).fetchone()
             return templates.TemplateResponse(
-                request,
-                "payment_failed.html",
-                {"business": business},
-                status_code=402,
+                request, "payment_failed.html", {"business": business}, status_code=402
             )
     return RedirectResponse(f"/booking/{reference}", status_code=303)
+
+
+@router.post("/pay/webhook")
+async def paystack_webhook(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_conn),
+    settings: Settings = Depends(get_settings),
+    payments: PaymentProvider = Depends(get_payments),
+):
+    """Server-to-server confirmation from Paystack (charge.success)."""
+    raw = await request.body()
+    if settings.paystack_secret_key:
+        signature = request.headers.get("X-Paystack-Signature", "")
+        expected = hmac.new(settings.paystack_secret_key.encode(), raw, hashlib.sha512).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise HTTPException(status_code=403, detail="Bad signature")
+    import json
+
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Bad payload")
+    if event.get("event") != "charge.success":
+        return {"ok": True}
+    reference = event.get("data", {}).get("reference", "")
+    booking = conn.execute(
+        "SELECT * FROM bookings WHERE payment_ref = ?", (reference,)
+    ).fetchone()
+    if booking is not None and booking["status"] == "pending":
+        if _confirm_booking(request, conn, booking):
+            # WhatsApp-originated bookings get their confirmation in the chat.
+            bot = Bot(settings, payments, request.app.state.wa)
+            bot.send_confirmation(conn, booking["customer_phone"], booking["id"])
+    return {"ok": True}
 
 
 @router.get("/booking/{reference}", response_class=HTMLResponse)
@@ -224,3 +251,26 @@ def booking_detail(
         "confirmed.html",
         {"business": business, "booking": booking, "balance": balance},
     )
+
+
+@router.post("/booking/{reference}/cancel", response_class=HTMLResponse)
+def cancel_booking(
+    request: Request,
+    reference: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    booking = conn.execute(
+        "SELECT * FROM bookings WHERE payment_ref = ? AND status = 'confirmed'", (reference,)
+    ).fetchone()
+    if booking is None:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    conn.execute(
+        "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'confirmed'",
+        (booking["id"],),
+    )
+    conn.commit()
+    booking_cancelled(conn, request.app.state.wa, booking["id"])
+    business = conn.execute(
+        "SELECT * FROM businesses WHERE id = ?", (booking["business_id"],)
+    ).fetchone()
+    return templates.TemplateResponse(request, "cancelled.html", {"business": business})

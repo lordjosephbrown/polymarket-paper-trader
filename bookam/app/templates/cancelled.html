@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Booking cancelled — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow center">
+  <h1>Booking cancelled</h1>
+  <p>Your slot has been released. Deposits are not refunded automatically — contact {{ business['name'] }} if you need to discuss it.</p>
+  <a class="btn btn-primary" href="/b/{{ business['slug'] }}">Book a new slot</a>
+</div>
+{% endblock %}
