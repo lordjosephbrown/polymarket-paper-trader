@@ -21,9 +21,14 @@ def available_slots(
     duration_min: int,
     date_str: str,
     now: datetime | None = None,
+    exclude_booking_id: int | None = None,
 ) -> list[str]:
     """Free start times at one location. Each branch runs its own calendar;
-    home-visit bookings occupy the calendar of the branch that dispatches them."""
+    home-visit bookings occupy the calendar of the branch that dispatches them.
+
+    exclude_booking_id ignores one booking — used when rescheduling it, so its
+    own current slot doesn't count as busy.
+    """
     now = now or now_utc()
     day = datetime.strptime(date_str, "%Y-%m-%d")
     hours = conn.execute(
@@ -32,13 +37,17 @@ def available_slots(
     ).fetchone()
     if hours is None:
         return []
+    from .db import ACTIVE_STATUSES
+
     # Pending (unpaid) bookings hold their slot briefly, then lapse.
     pending_cutoff = (now - timedelta(minutes=PENDING_HOLD_MIN)).isoformat(timespec="seconds")
+    active_list = ", ".join(f"'{s}'" for s in ACTIVE_STATUSES)
     busy_rows = conn.execute(
         "SELECT start_time, end_time FROM bookings"
         " WHERE business_id = ? AND location_id = ? AND date = ?"
-        " AND (status = 'confirmed' OR (status = 'pending' AND created_at > ?))",
-        (business_id, location_id, date_str, pending_cutoff),
+        f" AND (status IN ({active_list}) OR (status = 'pending' AND created_at > ?))"
+        " AND id IS NOT ?",
+        (business_id, location_id, date_str, pending_cutoff, exclude_booking_id),
     ).fetchall()
     busy = [(r["start_time"], r["end_time"]) for r in busy_rows]
     return slots_for_date(

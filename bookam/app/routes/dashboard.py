@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import db as dbmod
@@ -45,9 +45,9 @@ def dashboard(
     ).fetchall()
     stats = conn.execute(
         "SELECT"
-        " COUNT(*) FILTER (WHERE status IN ('confirmed','completed','no_show')) AS total,"
+        " COUNT(*) FILTER (WHERE status NOT IN ('pending','cancelled')) AS total,"
         " COUNT(*) FILTER (WHERE status = 'no_show') AS no_shows,"
-        " COALESCE(SUM(deposit_ghs) FILTER (WHERE status IN ('confirmed','completed','no_show')), 0) AS deposits"
+        " COALESCE(SUM(deposit_ghs) FILTER (WHERE status NOT IN ('pending','cancelled')), 0) AS deposits"
         " FROM bookings WHERE business_id = ?",
         (business["id"],),
     ).fetchone()
@@ -73,6 +73,7 @@ def dashboard(
 
 @router.post("/bookings/{booking_id}/status")
 def set_booking_status(
+    request: Request,
     booking_id: int,
     status: str = Form(...),
     business: sqlite3.Row | None = Depends(current_business),
@@ -80,14 +81,145 @@ def set_booking_status(
 ):
     if business is None:
         return login_redirect()
-    if status in {"completed", "no_show", "cancelled"}:
-        conn.execute(
-            "UPDATE bookings SET status = ? WHERE id = ? AND business_id = ?"
-            " AND status IN ('confirmed','completed','no_show')",
-            (status, booking_id, business["id"]),
-        )
+    booking = conn.execute(
+        "SELECT * FROM bookings WHERE id = ? AND business_id = ?",
+        (booking_id, business["id"]),
+    ).fetchone()
+    if booking is not None and status in dbmod.STATUS_TRANSITIONS.get(booking["status"], set()):
+        conn.execute("UPDATE bookings SET status = ? WHERE id = ?", (status, booking_id))
         conn.commit()
+        from ..notify import booking_cancelled_by_business, delivery_status_update
+
+        if status == "cancelled":
+            booking_cancelled_by_business(conn, request.app.state.wa, booking_id)
+        else:
+            delivery_status_update(conn, request.app.state.wa, booking_id, status)
     return RedirectResponse("/dashboard", status_code=303)
+
+
+@router.post("/bookings/{booking_id}/reschedule")
+def reschedule_booking(
+    request: Request,
+    booking_id: int,
+    date: str = Form(...),
+    start_time: str = Form(...),
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    booking = conn.execute(
+        "SELECT b.*, s.duration_min FROM bookings b JOIN services s ON s.id = b.service_id"
+        " WHERE b.id = ? AND b.business_id = ? AND b.status = 'confirmed'",
+        (booking_id, business["id"]),
+    ).fetchone()
+    if booking is None:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    from ..availability import available_slots
+    from ..slots import add_minutes
+
+    free = available_slots(
+        conn,
+        business["id"],
+        booking["location_id"],
+        booking["duration_min"],
+        date,
+        exclude_booking_id=booking["id"],
+    )
+    if start_time not in free:
+        raise HTTPException(status_code=409, detail="That slot isn't free")
+    old_date, old_time = booking["date"], booking["start_time"]
+    conn.execute(
+        "UPDATE bookings SET date = ?, start_time = ?, end_time = ?, reminded = 0 WHERE id = ?",
+        (date, start_time, add_minutes(start_time, booking["duration_min"]), booking_id),
+    )
+    conn.commit()
+    from ..notify import booking_rescheduled
+
+    booking_rescheduled(conn, request.app.state.wa, booking_id, old_date, old_time)
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+@router.get("/updates", response_class=HTMLResponse)
+def updates_page(
+    request: Request,
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    reach = conn.execute(
+        "SELECT COUNT(DISTINCT customer_phone) AS n FROM bookings"
+        " WHERE business_id = ? AND status != 'pending'",
+        (business["id"],),
+    ).fetchone()["n"]
+    recent = conn.execute(
+        "SELECT * FROM broadcasts WHERE business_id = ? ORDER BY id DESC LIMIT 5",
+        (business["id"],),
+    ).fetchall()
+    return templates.TemplateResponse(
+        request,
+        "updates.html",
+        {"business": business, "reach": reach, "recent": recent, "error": None},
+    )
+
+
+@router.post("/updates", response_class=HTMLResponse)
+def send_update(
+    request: Request,
+    message: str = Form(...),
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    message = message.strip()
+    day_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
+    recent_send = conn.execute(
+        "SELECT 1 FROM broadcasts WHERE business_id = ? AND created_at > ?",
+        (business["id"], day_ago),
+    ).fetchone()
+    error = None
+    if not message:
+        error = "Write your update first."
+    elif len(message) > 500:
+        error = "Keep updates under 500 characters."
+    elif recent_send:
+        error = "You can send one update per day — try again tomorrow."
+    if error:
+        reach = conn.execute(
+            "SELECT COUNT(DISTINCT customer_phone) AS n FROM bookings"
+            " WHERE business_id = ? AND status != 'pending'",
+            (business["id"],),
+        ).fetchone()["n"]
+        recent = conn.execute(
+            "SELECT * FROM broadcasts WHERE business_id = ? ORDER BY id DESC LIMIT 5",
+            (business["id"],),
+        ).fetchall()
+        return templates.TemplateResponse(
+            request,
+            "updates.html",
+            {"business": business, "reach": reach, "recent": recent, "error": error},
+            status_code=429 if recent_send else 400,
+        )
+    from ..notify import broadcast_to_customer
+
+    customers = conn.execute(
+        "SELECT DISTINCT customer_phone FROM bookings"
+        " WHERE business_id = ? AND status != 'pending'",
+        (business["id"],),
+    ).fetchall()
+    for row in customers:
+        broadcast_to_customer(
+            conn, request.app.state.wa, business, row["customer_phone"], message
+        )
+    conn.execute(
+        "INSERT INTO broadcasts (business_id, message, sent_count, created_at)"
+        " VALUES (?, ?, ?, ?)",
+        (business["id"], message, len(customers), dbmod.now_iso()),
+    )
+    conn.commit()
+    return RedirectResponse("/dashboard/updates", status_code=303)
 
 
 @router.get("/services", response_class=HTMLResponse)

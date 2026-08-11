@@ -162,6 +162,18 @@ input:focus, select:focus { outline: 2px solid var(--green); border-color: var(-
   font-size: 0.95rem;
 }
 
+.tracker { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin: 14px 0; }
+.tracker-step {
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.tracker-step.done { background: var(--green); color: #fff; border-color: var(--green); }
+
 .receipt { border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin: 16px 0; text-align: left; }
 .receipt > div { display: flex; justify-content: space-between; padding: 4px 0; }
 

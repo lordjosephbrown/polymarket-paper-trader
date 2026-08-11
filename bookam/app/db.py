@@ -84,6 +84,16 @@ CREATE TABLE IF NOT EXISTS conversations (
     updated_at TEXT NOT NULL
 );
 
+-- Broadcast announcements a business sends to its customers ("we moved",
+-- "new service", "price update"). Kept for rate limiting + audit.
+CREATE TABLE IF NOT EXISTS broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    message TEXT NOT NULL,
+    sent_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
 -- Every outbound WhatsApp message. In demo mode this is the only delivery;
 -- in live mode it doubles as an audit log.
 CREATE TABLE IF NOT EXISTS wa_outbox (
@@ -107,6 +117,18 @@ MIGRATIONS = [
 ]
 
 VENUES = {"business", "customer", "both"}
+
+# Statuses that occupy a calendar slot. Full lifecycle:
+# pending → confirmed → on_the_way → in_progress → completed
+#                     ↘ no_show / cancelled
+ACTIVE_STATUSES = ("confirmed", "on_the_way", "in_progress")
+
+# Which delivery-status moves the business may make from each state.
+STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "confirmed": {"on_the_way", "in_progress", "completed", "no_show", "cancelled"},
+    "on_the_way": {"in_progress", "completed", "cancelled"},
+    "in_progress": {"completed"},
+}
 
 def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)

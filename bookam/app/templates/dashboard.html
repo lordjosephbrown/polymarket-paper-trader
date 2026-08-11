@@ -40,16 +40,30 @@
         <span class="badge">{{ b['status'].replace('_', ' ') }}</span>
         <span class="badge badge-money">{{ b['deposit_ghs'] | ghs }} deposit</span>
       </div>
-      {% if b['status'] == 'confirmed' %}
+      {% if b['status'] in ('confirmed', 'on_the_way', 'in_progress') %}
       <div class="booking-actions">
+        {% if b['status'] == 'confirmed' and b['venue'] == 'customer' %}
+        <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+          <input type="hidden" name="status" value="on_the_way">
+          <button class="btn btn-small">🚗 On my way</button>
+        </form>
+        {% endif %}
+        {% if b['status'] in ('confirmed', 'on_the_way') %}
+        <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+          <input type="hidden" name="status" value="in_progress">
+          <button class="btn btn-small">▶ Start</button>
+        </form>
+        {% endif %}
         <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
           <input type="hidden" name="status" value="completed">
           <button class="btn btn-small">✓ Done</button>
         </form>
+        {% if b['status'] == 'confirmed' %}
         <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
           <input type="hidden" name="status" value="no_show">
           <button class="btn btn-small btn-warn">No-show</button>
         </form>
+        {% endif %}
       </div>
       {% endif %}
     </li>
@@ -70,6 +84,18 @@
         <strong>{{ b['date'] }} · {{ b['start_time'] }}</strong> · {{ b['service_name'] }}<br>
         <span>{{ b['customer_name'] }} · {{ b['customer_phone'] }}</span>
         {% if b['venue'] == 'customer' %}<br><span class="small">🏠 {{ b['customer_address'] }}</span>{% endif %}
+        <details class="small" style="margin-top:6px">
+          <summary>Change / cancel</summary>
+          <form method="post" action="/dashboard/bookings/{{ b['id'] }}/reschedule" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:8px 0">
+            <input type="date" name="date" value="{{ b['date'] }}" min="{{ today }}" required style="width:auto; margin:0">
+            <input type="time" name="start_time" value="{{ b['start_time'] }}" required style="width:auto; margin:0">
+            <button class="btn btn-small">Move &amp; notify customer</button>
+          </form>
+          <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+            <input type="hidden" name="status" value="cancelled">
+            <button class="btn btn-small btn-warn" onclick="return confirm('Cancel this booking? The customer will be notified and expects their GH₵{{ b['deposit_ghs'] }} deposit back.')">Cancel booking</button>
+          </form>
+        </details>
       </div>
     </li>
     {% endfor %}

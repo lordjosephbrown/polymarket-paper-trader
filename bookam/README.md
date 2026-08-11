@@ -29,7 +29,15 @@ lock it. No-shows drop, and the deposit is the business's to keep.
 - **Customer cancellation**: in the chat (send "cancel") or from the receipt page
 - **Paystack server-to-server webhook** (`/pay/webhook`, signature-verified) so payment
   confirmation doesn't depend on the customer's browser
-- **Dashboard**: today's appointments, upcoming, mark done / no-show, deposit stats
+- **Live delivery tracking** — the business taps On my way → Start → Done; the customer
+  gets a WhatsApp update at each step and sees a live status tracker on their receipt
+  page. "status" in the chat lists their bookings and where each one stands
+- **Business-initiated changes** — reschedule (customer notified of the new time, old
+  slot freed) or cancel (customer notified with a refund note); illegal status jumps
+  are rejected
+- **Broadcast updates** — one message a day to every past customer on WhatsApp:
+  new services, price changes, moved shops, holiday closures
+- **Dashboard**: today's appointments, upcoming, delivery pipeline buttons, deposit stats
 - **Customer list** with visit counts, no-show history, and one-tap WhatsApp
 
 ## Run it

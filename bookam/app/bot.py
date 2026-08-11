@@ -61,6 +61,17 @@ def _weekday_label(date_str: str) -> str:
     return day.strftime("%a %d %b")  # "Wed 13 Aug"
 
 
+def _phone_variants(phone: str) -> tuple[str, str]:
+    """A customer's bookings may be stored in local (024…) or wa (23324…) format —
+    web bookings save what they typed, WhatsApp bookings save the wa_id."""
+    digits = phone.lstrip("+")
+    if digits.startswith("233") and len(digits) == 12:
+        return digits, "0" + digits[3:]
+    if digits.startswith("0") and len(digits) == 10:
+        return "233" + digits[1:], digits
+    return digits, digits
+
+
 class Bot:
     def __init__(self, settings: Settings, payments: PaymentProvider, wa: WhatsAppClient) -> None:
         self.settings = settings
@@ -80,6 +91,9 @@ class Bot:
             return
         if lower in {"cancel", "cancel booking"}:
             self._offer_cancellations(conn, phone)
+            return
+        if lower in {"status", "my bookings", "bookings"}:
+            self._show_status(conn, phone)
             return
         if text.startswith("cxl:"):
             self._do_cancel(conn, phone, text[4:])
@@ -110,7 +124,7 @@ class Bot:
             phone,
             "👋 Welcome to Bookam! To book an appointment, tap the business's booking "
             "link, or send: book <business-code> (e.g. \"book adjoas-beauty-bar\"). "
-            "Send \"cancel\" to cancel an upcoming booking.",
+            "Send \"status\" to check your bookings, or \"cancel\" to cancel one.",
         )
 
     def _start_booking(self, conn: sqlite3.Connection, phone: str, lower_text: str) -> None:
@@ -444,17 +458,50 @@ class Bot:
             f"\nRef: {b['payment_ref']}\nSend \"cancel\" if your plans change.",
         )
 
-    # -- cancellation ------------------------------------------------------
+    # -- status tracking ---------------------------------------------------
 
-    def _offer_cancellations(self, conn: sqlite3.Connection, phone: str) -> None:
+    STATUS_LABELS = {
+        "confirmed": "✅ Booked",
+        "on_the_way": "🚗 On the way to you",
+        "in_progress": "💈 In progress",
+    }
+
+    def _show_status(self, conn: sqlite3.Connection, phone: str) -> None:
         today = now_utc().strftime("%Y-%m-%d")
+        wa_fmt, local_fmt = _phone_variants(phone)
         rows = conn.execute(
             "SELECT b.*, s.name AS service_name, biz.name AS business_name FROM bookings b"
             " JOIN services s ON s.id = b.service_id"
             " JOIN businesses biz ON biz.id = b.business_id"
-            " WHERE b.customer_phone = ? AND b.status = 'confirmed' AND b.date >= ?"
+            " WHERE b.customer_phone IN (?, ?) AND b.date >= ?"
+            " AND b.status IN ('confirmed','on_the_way','in_progress')"
+            " ORDER BY b.date, b.start_time LIMIT 5",
+            (wa_fmt, local_fmt, today),
+        ).fetchall()
+        if not rows:
+            self.wa.send_text(conn, phone, "You have no upcoming bookings.")
+            return
+        lines = ["📋 Your bookings:"]
+        for b in rows:
+            lines.append(
+                f"• {b['service_name']} with {b['business_name']} — "
+                f"{_weekday_label(b['date'])} at {b['start_time']}: "
+                f"{self.STATUS_LABELS[b['status']]}"
+            )
+        self.wa.send_text(conn, phone, "\n".join(lines))
+
+    # -- cancellation ------------------------------------------------------
+
+    def _offer_cancellations(self, conn: sqlite3.Connection, phone: str) -> None:
+        today = now_utc().strftime("%Y-%m-%d")
+        wa_fmt, local_fmt = _phone_variants(phone)
+        rows = conn.execute(
+            "SELECT b.*, s.name AS service_name, biz.name AS business_name FROM bookings b"
+            " JOIN services s ON s.id = b.service_id"
+            " JOIN businesses biz ON biz.id = b.business_id"
+            " WHERE b.customer_phone IN (?, ?) AND b.status = 'confirmed' AND b.date >= ?"
             " ORDER BY b.date, b.start_time LIMIT 10",
-            (phone, today),
+            (wa_fmt, local_fmt, today),
         ).fetchall()
         if not rows:
             self.wa.send_text(conn, phone, "You have no upcoming bookings to cancel.")
@@ -479,10 +526,11 @@ class Bot:
         )
 
     def _do_cancel(self, conn: sqlite3.Connection, phone: str, reference: str) -> None:
+        wa_fmt, local_fmt = _phone_variants(phone)
         booking = conn.execute(
-            "SELECT * FROM bookings WHERE payment_ref = ? AND customer_phone = ?"
+            "SELECT * FROM bookings WHERE payment_ref = ? AND customer_phone IN (?, ?)"
             " AND status = 'confirmed'",
-            (reference, phone),
+            (reference, wa_fmt, local_fmt),
         ).fetchone()
         if booking is None:
             self.wa.send_text(conn, phone, "I couldn't find that booking — it may already be cancelled.")

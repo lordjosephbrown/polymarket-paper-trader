@@ -1,8 +1,30 @@
 {% extends "base.html" %}
 {% block title %}Booking confirmed — Bookam{% endblock %}
 {% block content %}
+{% if booking['status'] in ('confirmed', 'on_the_way', 'in_progress') %}
+<meta http-equiv="refresh" content="30">
+{% endif %}
 <div class="card narrow center">
+  {% if booking['status'] == 'cancelled' %}
+  <h1>Cancelled</h1>
+  {% elif booking['status'] == 'completed' %}
+  <h1>🌟 Completed</h1>
+  {% else %}
   <h1>✅ Booked!</h1>
+  {% endif %}
+
+  {% if booking['status'] != 'cancelled' %}
+  <div class="tracker">
+    {% set steps = [('confirmed', 'Booked'), ('on_the_way', 'On the way'), ('in_progress', 'In progress'), ('completed', 'Done')] %}
+    {% set order = {'confirmed': 0, 'on_the_way': 1, 'in_progress': 2, 'completed': 3, 'no_show': 0} %}
+    {% set current = order.get(booking['status'], 0) %}
+    {% for key, label in steps %}
+    {% if not (key == 'on_the_way' and booking['venue'] != 'customer') %}
+    <span class="tracker-step {{ 'done' if order[key] <= current else '' }}">{{ label }}</span>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
   <p class="big">{{ booking['date'] }} at <strong>{{ booking['start_time'] }}</strong></p>
   <p>{{ booking['service_name'] }} with <strong>{{ business['name'] }}</strong>{% if business['location'] %} · {{ business['location'] }}{% endif %}</p>
   {% if booking['venue'] == 'customer' %}
