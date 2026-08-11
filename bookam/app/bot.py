@@ -95,6 +95,24 @@ class Bot:
         if lower in {"status", "my bookings", "bookings"}:
             self._show_status(conn, phone)
             return
+        if lower in {"stop", "unsubscribe"}:
+            conn.execute(
+                "INSERT OR IGNORE INTO broadcast_optouts (phone, created_at) VALUES (?, ?)",
+                (phone, dbmod.now_iso()),
+            )
+            conn.commit()
+            self.wa.send_text(
+                conn,
+                phone,
+                "You won't receive business updates anymore. Booking messages still come "
+                "through. Send \"start\" to resubscribe.",
+            )
+            return
+        if lower == "start" and state == "idle":
+            conn.execute("DELETE FROM broadcast_optouts WHERE phone = ?", (phone,))
+            conn.commit()
+            self.wa.send_text(conn, phone, "Welcome back! You'll receive business updates again.")
+            return
         if text.startswith("cxl:"):
             self._do_cancel(conn, phone, text[4:])
             return
@@ -373,6 +391,7 @@ class Bot:
         if self.payments.demo:
             reference = new_reference()
             status = "confirmed"
+            dbmod.log_payment_event(conn, reference, "verified", deposit_total)
         else:
             provider = momo_provider_from_phone(phone) or "mtn"
             try:
@@ -389,6 +408,7 @@ class Bot:
                 _clear_conversation(conn, phone)
                 return
             status = "pending"
+            dbmod.log_payment_event(conn, reference, "initialized", deposit_total)
 
         conn.execute(
             "INSERT INTO bookings (business_id, location_id, service_id, venue, customer_address,"
@@ -540,6 +560,7 @@ class Bot:
             (booking["id"],),
         )
         conn.commit()
+        dbmod.log_booking_event(conn, booking["id"], "confirmed", "cancelled", "customer")
         self.wa.send_text(
             conn, phone, f"Your booking on {booking['date']} at {booking['start_time']} is cancelled."
         )

@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from .. import db as dbmod
 from ..config import Settings
@@ -88,6 +88,7 @@ def set_booking_status(
     if booking is not None and status in dbmod.STATUS_TRANSITIONS.get(booking["status"], set()):
         conn.execute("UPDATE bookings SET status = ? WHERE id = ?", (status, booking_id))
         conn.commit()
+        dbmod.log_booking_event(conn, booking_id, booking["status"], status, "business")
         from ..notify import booking_cancelled_by_business, delivery_status_update
 
         if status == "cancelled":
@@ -134,6 +135,7 @@ def reschedule_booking(
         (date, start_time, add_minutes(start_time, booking["duration_min"]), booking_id),
     )
     conn.commit()
+    dbmod.log_booking_event(conn, booking_id, "confirmed", "rescheduled", "business")
     from ..notify import booking_rescheduled
 
     booking_rescheduled(conn, request.app.state.wa, booking_id, old_date, old_time)
@@ -203,12 +205,21 @@ def send_update(
             status_code=429 if recent_send else 400,
         )
     from ..notify import broadcast_to_customer
+    from ..wa import to_wa_number
 
-    customers = conn.execute(
-        "SELECT DISTINCT customer_phone FROM bookings"
-        " WHERE business_id = ? AND status != 'pending'",
-        (business["id"],),
-    ).fetchall()
+    optouts = {
+        r["phone"]
+        for r in conn.execute("SELECT phone FROM broadcast_optouts").fetchall()
+    }
+    customers = [
+        row
+        for row in conn.execute(
+            "SELECT DISTINCT customer_phone FROM bookings"
+            " WHERE business_id = ? AND status != 'pending'",
+            (business["id"],),
+        ).fetchall()
+        if to_wa_number(row["customer_phone"]) not in optouts
+    ]
     for row in customers:
         broadcast_to_customer(
             conn, request.app.state.wa, business, row["customer_phone"], message
@@ -437,6 +448,106 @@ def delete_location(
         )
         conn.commit()
     return RedirectResponse("/dashboard/locations", status_code=303)
+
+
+@router.get("/reports", response_class=HTMLResponse)
+def reports_page(
+    request: Request,
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    monthly = conn.execute(
+        "SELECT substr(date, 1, 7) AS month,"
+        " COUNT(*) AS bookings,"
+        " COALESCE(SUM(deposit_ghs), 0) AS deposits,"
+        " COUNT(*) FILTER (WHERE status = 'no_show') AS no_shows"
+        " FROM bookings WHERE business_id = ? AND status NOT IN ('pending','cancelled')"
+        " GROUP BY substr(date, 1, 7) ORDER BY month DESC LIMIT 6",
+        (business["id"],),
+    ).fetchall()
+    top_services = conn.execute(
+        "SELECT s.name, COUNT(*) AS n, COALESCE(SUM(b.deposit_ghs), 0) AS deposits"
+        " FROM bookings b JOIN services s ON s.id = b.service_id"
+        " WHERE b.business_id = ? AND b.status NOT IN ('pending','cancelled')"
+        " GROUP BY s.id ORDER BY n DESC LIMIT 5",
+        (business["id"],),
+    ).fetchall()
+    top_customers = conn.execute(
+        "SELECT customer_name, customer_phone, COUNT(*) AS n"
+        " FROM bookings WHERE business_id = ? AND status NOT IN ('pending','cancelled')"
+        " GROUP BY customer_phone ORDER BY n DESC LIMIT 5",
+        (business["id"],),
+    ).fetchall()
+    return templates.TemplateResponse(
+        request,
+        "reports.html",
+        {
+            "business": business,
+            "monthly": monthly,
+            "top_services": top_services,
+            "top_customers": top_customers,
+        },
+    )
+
+
+def _csv_response(filename: str, header: list[str], rows: list[tuple]) -> "PlainTextResponse":
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    writer.writerows(rows)
+    return PlainTextResponse(
+        buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/export/bookings.csv")
+def export_bookings(
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    rows = conn.execute(
+        "SELECT b.date, b.start_time, s.name, b.customer_name, b.customer_phone,"
+        " b.status, b.venue, b.customer_address, b.deposit_ghs, b.travel_fee_ghs, b.payment_ref"
+        " FROM bookings b JOIN services s ON s.id = b.service_id"
+        " WHERE b.business_id = ? ORDER BY b.date, b.start_time",
+        (business["id"],),
+    ).fetchall()
+    return _csv_response(
+        "bookings.csv",
+        ["date", "time", "service", "customer", "phone", "status", "venue",
+         "address", "deposit_ghs", "travel_fee_ghs", "reference"],
+        [tuple(r) for r in rows],
+    )
+
+
+@router.get("/export/customers.csv")
+def export_customers(
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    rows = conn.execute(
+        "SELECT customer_name, customer_phone, COUNT(*),"
+        " COUNT(*) FILTER (WHERE status = 'no_show'), MAX(date)"
+        " FROM bookings WHERE business_id = ? AND status != 'pending'"
+        " GROUP BY customer_phone ORDER BY MAX(date) DESC",
+        (business["id"],),
+    ).fetchall()
+    return _csv_response(
+        "customers.csv",
+        ["name", "phone", "bookings", "no_shows", "last_visit"],
+        [tuple(r) for r in rows],
+    )
 
 
 @router.get("/customers", response_class=HTMLResponse)

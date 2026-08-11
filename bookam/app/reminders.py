@@ -42,11 +42,75 @@ def scan_and_send(db_path: str, wa: WhatsAppClient) -> int:
         conn.close()
 
 
-async def reminder_loop(db_path: str, wa: WhatsAppClient) -> None:
+def reconcile_pending(db_path: str, payments, wa: WhatsAppClient) -> int:
+    """Resolve stuck 'pending' payments (Grok checklist: delayed callbacks,
+    pending-forever states).
+
+    A booking can sit pending if the customer paid but the callback and
+    webhook were both lost, or if they abandoned checkout. Live mode only —
+    demo verify() always succeeds, which would wrongly confirm abandoned
+    checkouts. Verified-paid bookings confirm (with notifications); unpaid
+    holds older than the pending window are cancelled and ledgered as expired.
+    """
+    from . import db as dbmod
+    from .availability import PENDING_HOLD_MIN, now_utc
+    from .notify import booking_confirmed
+
+    if payments.demo:
+        return 0
+    now = now_utc()
+    grace_start = (now - timedelta(minutes=3)).isoformat(timespec="seconds")
+    day_ago = (now - timedelta(hours=24)).isoformat(timespec="seconds")
+    hold_cutoff = (now - timedelta(minutes=PENDING_HOLD_MIN)).isoformat(timespec="seconds")
+    conn = dbmod.connect(db_path)
+    resolved = 0
+    try:
+        stuck = conn.execute(
+            "SELECT * FROM bookings WHERE status = 'pending'"
+            " AND created_at < ? AND created_at > ?",
+            (grace_start, day_ago),
+        ).fetchall()
+        for booking in stuck:
+            try:
+                paid = payments.verify(booking["payment_ref"])
+            except Exception:
+                continue  # provider hiccup — retry next scan
+            if paid:
+                cur = conn.execute(
+                    "UPDATE bookings SET status = 'confirmed' WHERE id = ? AND status = 'pending'",
+                    (booking["id"],),
+                )
+                conn.commit()
+                if cur.rowcount == 1:
+                    dbmod.log_payment_event(
+                        conn, booking["payment_ref"], "verified", booking["deposit_ghs"]
+                    )
+                    dbmod.log_booking_event(conn, booking["id"], "pending", "confirmed", "system")
+                    booking_confirmed(conn, wa, booking["id"])
+                    resolved += 1
+            elif booking["created_at"] < hold_cutoff:
+                conn.execute(
+                    "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
+                    (booking["id"],),
+                )
+                conn.commit()
+                dbmod.log_payment_event(conn, booking["payment_ref"], "expired")
+                dbmod.log_booking_event(conn, booking["id"], "pending", "cancelled", "system")
+                resolved += 1
+        return resolved
+    finally:
+        conn.close()
+
+
+async def jobs_loop(db_path: str, payments, wa: WhatsAppClient) -> None:
     while True:
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)
         try:
             scan_and_send(db_path, wa)
         except Exception:
             # The loop must survive transient DB/network hiccups.
+            pass
+        try:
+            reconcile_pending(db_path, payments, wa)
+        except Exception:
             pass

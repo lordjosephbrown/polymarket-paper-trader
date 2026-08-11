@@ -183,6 +183,8 @@ def book(
     customer_address = customer_address.strip()
     if venue == "customer" and not customer_address:
         raise HTTPException(status_code=400, detail="Enter your address for a home visit")
+    if dbmod.rate_limited(conn, f"book:{phone_n}", limit=10, window_seconds=3600):
+        raise HTTPException(status_code=429, detail="Too many booking attempts — try later")
     travel_fee = float(service["travel_fee_ghs"]) if venue == "customer" else 0.0
     deposit_total = float(service["deposit_ghs"]) + travel_fee
 
@@ -202,6 +204,7 @@ def book(
         )
     except PaymentError:
         raise HTTPException(status_code=502, detail="Payment service unavailable, try again")
+    dbmod.log_payment_event(conn, init.reference, "initialized", deposit_total)
     conn.execute(
         "INSERT INTO bookings (business_id, location_id, service_id, venue, customer_address,"
         " travel_fee_ghs, customer_name, customer_phone,"
@@ -236,6 +239,7 @@ def _confirm_booking(request: Request, conn: sqlite3.Connection, booking: sqlite
     )
     conn.commit()
     if cur.rowcount == 1:
+        dbmod.log_booking_event(conn, booking["id"], "pending", "confirmed", "system")
         booking_confirmed(conn, request.app.state.wa, booking["id"])
         return True
     return False
@@ -255,13 +259,16 @@ def pay_callback(
         raise HTTPException(status_code=404, detail="Booking not found")
     if booking["status"] == "pending":
         if payments.verify(reference):
+            dbmod.log_payment_event(conn, reference, "verified", booking["deposit_ghs"])
             _confirm_booking(request, conn, booking)
         else:
+            dbmod.log_payment_event(conn, reference, "failed")
             conn.execute(
                 "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
                 (booking["id"],),
             )
             conn.commit()
+            dbmod.log_booking_event(conn, booking["id"], "pending", "cancelled", "system")
             business = conn.execute(
                 "SELECT * FROM businesses WHERE id = ?", (booking["business_id"],)
             ).fetchone()
@@ -298,6 +305,7 @@ async def paystack_webhook(
         "SELECT * FROM bookings WHERE payment_ref = ?", (reference,)
     ).fetchone()
     if booking is not None and booking["status"] == "pending":
+        dbmod.log_payment_event(conn, reference, "webhook_success", booking["deposit_ghs"])
         if _confirm_booking(request, conn, booking):
             # WhatsApp-originated bookings get their confirmation in the chat.
             bot = Bot(settings, payments, request.app.state.wa)
@@ -350,6 +358,7 @@ def cancel_booking(
         (booking["id"],),
     )
     conn.commit()
+    dbmod.log_booking_event(conn, booking["id"], "confirmed", "cancelled", "customer")
     booking_cancelled(conn, request.app.state.wa, booking["id"])
     business = conn.execute(
         "SELECT * FROM businesses WHERE id = ?", (booking["business_id"],)

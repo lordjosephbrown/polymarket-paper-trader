@@ -92,13 +92,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         import asyncio
 
-        from .reminders import reminder_loop
+        from .reminders import jobs_loop
 
-        task = asyncio.create_task(reminder_loop(settings.db_path, app.state.wa))
+        task = asyncio.create_task(
+            jobs_loop(settings.db_path, app.state.payments, app.state.wa)
+        )
         yield
         task.cancel()
 
     app = FastAPI(title="Bookam", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        return response
+
+    @app.get("/healthz")
+    def healthz():
+        return {"ok": True}
     app.state.settings = settings
     app.state.payments = PaymentProvider(settings.paystack_secret_key)
 

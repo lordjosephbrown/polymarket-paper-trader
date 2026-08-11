@@ -94,6 +94,40 @@ CREATE TABLE IF NOT EXISTS broadcasts (
     created_at TEXT NOT NULL
 );
 
+-- Audit trail: every booking status change, who made it, when.
+CREATE TABLE IF NOT EXISTS booking_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL REFERENCES bookings(id),
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    actor TEXT NOT NULL,               -- business|customer|system
+    created_at TEXT NOT NULL
+);
+
+-- Ledger of payment lifecycle events for reconciliation and audit.
+CREATE TABLE IF NOT EXISTS payment_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference TEXT NOT NULL,
+    kind TEXT NOT NULL,                -- initialized|verified|failed|webhook_success|expired
+    amount_ghs REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_payment_events_ref ON payment_events(reference);
+
+-- Customers who opted out of broadcast updates ("stop" on WhatsApp).
+CREATE TABLE IF NOT EXISTS broadcast_optouts (
+    phone TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
+-- Sliding-window rate limiting (login attempts, public booking spam).
+CREATE TABLE IF NOT EXISTS rate_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_events_key ON rate_events(key, created_at);
+
 -- Every outbound WhatsApp message. In demo mode this is the only delivery;
 -- in live mode it doubles as an audit log.
 CREATE TABLE IF NOT EXISTS wa_outbox (
@@ -234,3 +268,45 @@ def default_location_id(conn: sqlite3.Connection, business_id: int) -> int | Non
         (business_id,),
     ).fetchone()
     return row["id"] if row else None
+
+
+def log_booking_event(
+    conn: sqlite3.Connection, booking_id: int, from_status: str, to_status: str, actor: str
+) -> None:
+    conn.execute(
+        "INSERT INTO booking_events (booking_id, from_status, to_status, actor, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (booking_id, from_status, to_status, actor, now_iso()),
+    )
+    conn.commit()
+
+
+def log_payment_event(
+    conn: sqlite3.Connection, reference: str, kind: str, amount_ghs: float = 0
+) -> None:
+    conn.execute(
+        "INSERT INTO payment_events (reference, kind, amount_ghs, created_at) VALUES (?, ?, ?, ?)",
+        (reference, kind, amount_ghs, now_iso()),
+    )
+    conn.commit()
+
+
+def rate_limited(
+    conn: sqlite3.Connection, key: str, limit: int, window_seconds: int
+) -> bool:
+    """Record one event for `key` and report whether the window limit is now exceeded."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=window_seconds)).isoformat(timespec="seconds")
+    conn.execute("DELETE FROM rate_events WHERE key = ? AND created_at < ?", (key, cutoff))
+    conn.execute(
+        "INSERT INTO rate_events (key, created_at) VALUES (?, ?)",
+        (key, now.isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    count = conn.execute(
+        "SELECT COUNT(*) AS n FROM rate_events WHERE key = ? AND created_at >= ?",
+        (key, cutoff),
+    ).fetchone()["n"]
+    return count > limit

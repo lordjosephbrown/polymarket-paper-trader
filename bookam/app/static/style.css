@@ -177,4 +177,14 @@ input:focus, select:focus { outline: 2px solid var(--green); border-color: var(-
 .receipt { border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin: 16px 0; text-align: left; }
 .receipt > div { display: flex; justify-content: space-between; padding: 4px 0; }
 
+.report-table { width: 100%; border-collapse: collapse; }
+.report-table th, .report-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.report-table th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; }
+
 .footer { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 24px 16px; }
+.footer a { color: var(--muted); }

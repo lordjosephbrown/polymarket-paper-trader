@@ -99,6 +99,13 @@ def login(
     settings: Settings = Depends(get_settings),
 ):
     phone_n = normalize_phone(phone)
+    if dbmod.rate_limited(conn, f"login:{phone_n}", limit=8, window_seconds=600):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Too many attempts. Wait a few minutes and try again."},
+            status_code=429,
+        )
     row = conn.execute("SELECT * FROM businesses WHERE phone = ?", (phone_n,)).fetchone()
     if row is None or not verify_password(password, row["password_hash"]):
         return templates.TemplateResponse(
@@ -114,3 +121,13 @@ def logout():
     response = RedirectResponse("/", status_code=303)
     response.delete_cookie(SESSION_COOKIE)
     return response
+
+
+@router.get("/privacy", response_class=HTMLResponse)
+def privacy(request: Request):
+    return templates.TemplateResponse(request, "privacy.html", {})
+
+
+@router.get("/terms", response_class=HTMLResponse)
+def terms(request: Request):
+    return templates.TemplateResponse(request, "terms.html", {})

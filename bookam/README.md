@@ -39,6 +39,12 @@ lock it. No-shows drop, and the deposit is the business's to keep.
   new services, price changes, moved shops, holiday closures
 - **Dashboard**: today's appointments, upcoming, delivery pipeline buttons, deposit stats
 - **Customer list** with visit counts, no-show history, and one-tap WhatsApp
+- **Reports & data export** — monthly bookings/deposits, top services & customers,
+  CSV export of bookings and customers (the business owns its data)
+- **Production hardening** — audit trail of every status change, payment-event ledger,
+  automatic reconciliation of stuck payments (paid-but-unconfirmed bookings recover;
+  abandoned holds expire), login & booking rate limiting, security headers, `/healthz`,
+  broadcast opt-out (reply STOP), and Ghana DPA-aware privacy/terms pages
 
 ## Run it
 
