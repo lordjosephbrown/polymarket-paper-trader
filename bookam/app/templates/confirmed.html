@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Booking confirmed — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow center">
+  <h1>✅ Booked!</h1>
+  <p class="big">{{ booking['date'] }} at <strong>{{ booking['start_time'] }}</strong></p>
+  <p>{{ booking['service_name'] }} with <strong>{{ business['name'] }}</strong>{% if business['location'] %} · {{ business['location'] }}{% endif %}</p>
+  <div class="receipt">
+    <div><span>Deposit paid</span><span>{{ booking['deposit_ghs'] | ghs }}</span></div>
+    <div><span>Balance at appointment</span><span>{{ balance | ghs }}</span></div>
+    <div class="muted small"><span>Reference</span><span>{{ booking['payment_ref'] }}</span></div>
+  </div>
+  <p class="small muted">Show this page when you arrive. Save the link — it's your receipt.</p>
+  <a class="btn btn-primary" href="https://wa.me/{{ business['phone'] | replace('+', '') }}?text={{ ('Hi ' ~ business['name'] ~ ', I just booked ' ~ booking['service_name'] ~ ' for ' ~ booking['date'] ~ ' at ' ~ booking['start_time'] ~ '. My reference is ' ~ booking['payment_ref'] ~ '.') | urlquote }}">Message {{ business['name'] }} on WhatsApp</a>
+</div>
+{% endblock %}

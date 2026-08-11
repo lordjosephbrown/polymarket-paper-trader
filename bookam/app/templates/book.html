@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Book {{ business['name'] }} — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>{{ business['name'] }}</h1>
+  {% if business['location'] %}<p class="muted">📍 {{ business['location'] }}</p>{% endif %}
+  {% if business['about'] %}<p>{{ business['about'] }}</p>{% endif %}
+
+  {% if services %}
+  <form method="post" action="/b/{{ business['slug'] }}/book" id="bookform">
+    <label>Choose a service
+      <select name="service_id" id="service" required>
+        <option value="" disabled selected>Select…</option>
+        {% for s in services %}
+        <option value="{{ s['id'] }}" data-deposit="{{ s['deposit_ghs'] }}" data-price="{{ s['price_ghs'] }}">
+          {{ s['name'] }} — {{ s['price_ghs'] | ghs }} ({{ s['duration_min'] }} min)
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Pick a date
+      <input type="date" name="date" id="date" required min="{{ today }}" max="{{ max_date }}">
+    </label>
+    <label>Pick a time
+      <select name="start_time" id="slot" required disabled>
+        <option value="" disabled selected>Choose service &amp; date first</option>
+      </select>
+    </label>
+    <div id="deposit-note" class="deposit-note" hidden>
+      To lock your slot, pay a <strong id="deposit-amt"></strong> deposit now (MoMo or card).
+      The balance is paid at your appointment.
+    </div>
+    <label>Your name
+      <input name="customer_name" required maxlength="80" placeholder="e.g. Ama Serwaa">
+    </label>
+    <label>Your phone (MoMo number)
+      <input name="customer_phone" required inputmode="tel" placeholder="0241234567">
+    </label>
+    <button class="btn btn-primary wide" type="submit" id="paybtn" disabled>Pay deposit &amp; book</button>
+  </form>
+  {% else %}
+  <p class="muted">This business hasn't added any services yet. Check back soon.</p>
+  {% endif %}
+</div>
+
+<script>
+const service = document.getElementById('service');
+const dateEl = document.getElementById('date');
+const slotEl = document.getElementById('slot');
+const payBtn = document.getElementById('paybtn');
+const depositNote = document.getElementById('deposit-note');
+const depositAmt = document.getElementById('deposit-amt');
+
+async function loadSlots() {
+  if (!service.value || !dateEl.value) return;
+  slotEl.disabled = true;
+  slotEl.innerHTML = '<option>Loading…</option>';
+  const res = await fetch(`/b/{{ business['slug'] }}/slots?service_id=${service.value}&date=${dateEl.value}`);
+  const data = await res.json();
+  slotEl.innerHTML = '';
+  if (data.slots.length === 0) {
+    slotEl.innerHTML = '<option value="" disabled selected>No free slots this day — try another date</option>';
+    payBtn.disabled = true;
+    return;
+  }
+  for (const t of data.slots) {
+    const opt = document.createElement('option');
+    opt.value = t; opt.textContent = t;
+    slotEl.appendChild(opt);
+  }
+  slotEl.disabled = false;
+  payBtn.disabled = false;
+}
+
+function updateDeposit() {
+  const opt = service.selectedOptions[0];
+  if (opt && opt.dataset.deposit !== undefined) {
+    const dep = parseFloat(opt.dataset.deposit);
+    depositAmt.textContent = 'GH₵' + dep.toFixed(2).replace(/\.00$/, '');
+    depositNote.hidden = false;
+  }
+}
+
+service.addEventListener('change', () => { updateDeposit(); loadSlots(); });
+dateEl.addEventListener('change', loadSlots);
+</script>
+{% endblock %}
