@@ -16,7 +16,14 @@ lock it. No-shows drop, and the deposit is the business's to keep.
 - **Home service / mobile businesses** — a service can happen at the shop, at the
   customer's place, or either. Home visits capture the customer's address and add a
   configurable travel/callout fee to the deposit
-- **Public directory** at `/discover` — customers find businesses by name, category, or area
+- **Team / multi-staff** — add team members per branch and the branch takes that many
+  overlapping bookings; customers pick "anyone available" or a specific person
+  (web and WhatsApp); auto-assignment fills the first free person
+- **Ratings & reviews** — after a completed appointment the customer is asked to rate
+  (reply "rate 5" on WhatsApp, or on the receipt page); average stars show on booking
+  pages and the directory. One review per booking
+- **Public directory** at `/discover` — customers find businesses by name, category, or
+  area, ranked with their star ratings
 - **Working hours** per weekday per branch; closed days have no slots
 - **Public booking page** at `/b/<slug>` — mobile-first, made to be opened from WhatsApp
 - **Live slot availability** — double-bookings are impossible; unpaid holds lapse after 15 min

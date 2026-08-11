@@ -32,13 +32,17 @@ def dashboard(
         return login_redirect()
     today = _today()
     todays = conn.execute(
-        "SELECT b.*, s.name AS service_name FROM bookings b JOIN services s ON s.id = b.service_id"
+        "SELECT b.*, s.name AS service_name, st.name AS staff_name FROM bookings b"
+        " JOIN services s ON s.id = b.service_id"
+        " LEFT JOIN staff st ON st.id = b.staff_id"
         " WHERE b.business_id = ? AND b.date = ? AND b.status != 'pending'"
         " ORDER BY b.start_time",
         (business["id"], today),
     ).fetchall()
     upcoming = conn.execute(
-        "SELECT b.*, s.name AS service_name FROM bookings b JOIN services s ON s.id = b.service_id"
+        "SELECT b.*, s.name AS service_name, st.name AS staff_name FROM bookings b"
+        " JOIN services s ON s.id = b.service_id"
+        " LEFT JOIN staff st ON st.id = b.staff_id"
         " WHERE b.business_id = ? AND b.date > ? AND b.status = 'confirmed'"
         " ORDER BY b.date, b.start_time LIMIT 20",
         (business["id"], today),
@@ -126,6 +130,7 @@ def reschedule_booking(
         booking["duration_min"],
         date,
         exclude_booking_id=booking["id"],
+        staff_id=booking["staff_id"],
     )
     if start_time not in free:
         raise HTTPException(status_code=409, detail="That slot isn't free")
@@ -548,6 +553,68 @@ def export_customers(
         ["name", "phone", "bookings", "no_shows", "last_visit"],
         [tuple(r) for r in rows],
     )
+
+
+@router.get("/staff", response_class=HTMLResponse)
+def staff_page(
+    request: Request,
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    locations = dbmod.active_locations(conn, business["id"])
+    members = conn.execute(
+        "SELECT st.*, l.name AS location_name FROM staff st"
+        " JOIN locations l ON l.id = st.location_id"
+        " WHERE st.business_id = ? AND st.active = 1 ORDER BY st.location_id, st.id",
+        (business["id"],),
+    ).fetchall()
+    return templates.TemplateResponse(
+        request,
+        "staff.html",
+        {"business": business, "locations": locations, "members": members, "error": None},
+    )
+
+
+@router.post("/staff", response_class=HTMLResponse)
+def add_staff(
+    request: Request,
+    name: str = Form(...),
+    location_id: int = Form(...),
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    location = conn.execute(
+        "SELECT 1 FROM locations WHERE id = ? AND business_id = ? AND active = 1",
+        (location_id, business["id"]),
+    ).fetchone()
+    if not name.strip() or location is None:
+        return RedirectResponse("/dashboard/staff", status_code=303)
+    conn.execute(
+        "INSERT INTO staff (business_id, location_id, name) VALUES (?, ?, ?)",
+        (business["id"], location_id, name.strip()),
+    )
+    conn.commit()
+    return RedirectResponse("/dashboard/staff", status_code=303)
+
+
+@router.post("/staff/{staff_id}/delete")
+def remove_staff(
+    staff_id: int,
+    business: sqlite3.Row | None = Depends(current_business),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    if business is None:
+        return login_redirect()
+    conn.execute(
+        "UPDATE staff SET active = 0 WHERE id = ? AND business_id = ?",
+        (staff_id, business["id"]),
+    )
+    conn.commit()
+    return RedirectResponse("/dashboard/staff", status_code=303)
 
 
 @router.get("/customers", response_class=HTMLResponse)

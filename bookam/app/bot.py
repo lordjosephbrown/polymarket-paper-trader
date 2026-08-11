@@ -14,11 +14,12 @@ anything else gets the greeting.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta
 
 from . import db as dbmod
-from .availability import available_slots, bookable_dates, now_utc
+from .availability import available_slots, bookable_dates, find_free_staff, now_utc
 from .config import Settings
 from .notify import booking_cancelled, booking_confirmed
 from .payments import PaymentError, PaymentProvider, momo_provider_from_phone, new_reference
@@ -95,6 +96,10 @@ class Bot:
         if lower in {"status", "my bookings", "bookings"}:
             self._show_status(conn, phone)
             return
+        rate_match = re.match(r"rate\s+([1-5])(?:\s+(.+))?$", lower)
+        if rate_match:
+            self._rate(conn, phone, int(rate_match.group(1)), (rate_match.group(2) or "").strip())
+            return
         if lower in {"stop", "unsubscribe"}:
             conn.execute(
                 "INSERT OR IGNORE INTO broadcast_optouts (phone, created_at) VALUES (?, ?)",
@@ -123,6 +128,8 @@ class Bot:
             self._pick_location(conn, phone, data, business_id, text[4:])
         elif state == "await_venue" and text.startswith("ven:"):
             self._pick_venue(conn, phone, data, business_id, text[4:])
+        elif state == "await_staff" and text.startswith("stf:"):
+            self._pick_staff(conn, phone, data, business_id, text[4:])
         elif state == "await_address":
             self._pick_address(conn, phone, data, business_id, text)
         elif state == "await_date" and text.startswith("date:"):
@@ -254,7 +261,7 @@ class Bot:
         if offered == "customer":
             self._ask_address(conn, phone, data, business_id)
         else:
-            self._show_dates(conn, phone, data, business_id)
+            self._ask_staff(conn, phone, data, business_id)
 
     def _pick_venue(
         self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None, choice: str
@@ -266,7 +273,7 @@ class Bot:
         if choice == "customer":
             self._ask_address(conn, phone, data, business_id)
         else:
-            self._show_dates(conn, phone, data, business_id)
+            self._ask_staff(conn, phone, data, business_id)
 
     def _ask_address(
         self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None
@@ -286,7 +293,71 @@ class Bot:
             self.wa.send_text(conn, phone, "Please send your address for the home visit.")
             return
         data["address"] = address.strip()
+        self._ask_staff(conn, phone, data, business_id)
+
+    def _ask_staff(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None
+    ) -> None:
+        members = conn.execute(
+            "SELECT * FROM staff WHERE location_id = ? AND active = 1 ORDER BY id",
+            (data.get("location_id"),),
+        ).fetchall()
+        if len(members) < 2:
+            data["staff_id"] = members[0]["id"] if members else 0
+            self._show_dates(conn, phone, data, business_id)
+            return
+        rows = [{"id": "stf:0", "title": "Anyone available", "description": "First free person"}]
+        rows += [{"id": f"stf:{m['id']}", "title": m["name"][:24], "description": ""} for m in members]
+        self.wa.send(
+            conn,
+            phone,
+            list_message("Who would you like?", "Choose person", rows, header="Team"),
+        )
+        _save_conversation(conn, phone, "await_staff", data, business_id)
+
+    def _pick_staff(
+        self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None, choice: str
+    ) -> None:
+        if choice != "0":
+            member = conn.execute(
+                "SELECT * FROM staff WHERE id = ? AND location_id = ? AND active = 1",
+                (choice, data.get("location_id")),
+            ).fetchone()
+            if member is None:
+                self._greet(conn, phone)
+                return
+            data["staff_id"] = member["id"]
+        else:
+            data["staff_id"] = 0  # anyone
         self._show_dates(conn, phone, data, business_id)
+
+    def _staff_filter(self, data: dict) -> int | None:
+        staff_id = data.get("staff_id")
+        return staff_id if staff_id else None
+
+    def _rate(self, conn: sqlite3.Connection, phone: str, rating: int, comment: str) -> None:
+        wa_fmt, local_fmt = _phone_variants(phone)
+        booking = conn.execute(
+            "SELECT * FROM bookings WHERE customer_phone IN (?, ?) AND status = 'completed'"
+            " AND id NOT IN (SELECT booking_id FROM reviews)"
+            " ORDER BY date DESC, start_time DESC LIMIT 1",
+            (wa_fmt, local_fmt),
+        ).fetchone()
+        if booking is None:
+            self.wa.send_text(
+                conn, phone, "I couldn't find a completed booking to rate — thanks anyway!"
+            )
+            return
+        conn.execute(
+            "INSERT OR IGNORE INTO reviews (booking_id, business_id, rating, comment, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (booking["id"], booking["business_id"], rating, comment[:300], dbmod.now_iso()),
+        )
+        conn.commit()
+        stars = "⭐" * rating
+        self.wa.send_text(
+            conn, phone, f"{stars} Thank you! Your rating helps others find great businesses."
+        )
 
     def _show_dates(
         self, conn: sqlite3.Connection, phone: str, data: dict, business_id: int | None
@@ -297,7 +368,10 @@ class Bot:
         if service is None or data.get("location_id") is None:
             self._greet(conn, phone)
             return
-        dates = bookable_dates(conn, business_id, data["location_id"], service["duration_min"])
+        dates = bookable_dates(
+            conn, business_id, data["location_id"], service["duration_min"],
+            staff_id=self._staff_filter(data),
+        )
         if not dates:
             self.wa.send_text(
                 conn, phone, "😔 No free slots in the next month. Message the business directly."
@@ -322,7 +396,8 @@ class Bot:
             self._greet(conn, phone)
             return
         slots = available_slots(
-            conn, business_id, data["location_id"], service["duration_min"], date_str
+            conn, business_id, data["location_id"], service["duration_min"], date_str,
+            staff_id=self._staff_filter(data),
         )
         if not slots:
             self.wa.send_text(conn, phone, "That day just filled up — pick another one.")
@@ -347,7 +422,8 @@ class Bot:
             self._greet(conn, phone)
             return
         if time_str not in available_slots(
-            conn, business_id, data["location_id"], service["duration_min"], data["date"]
+            conn, business_id, data["location_id"], service["duration_min"], data["date"],
+            staff_id=self._staff_filter(data),
         ):
             self.wa.send_text(conn, phone, "That time was just taken — here are the free ones:")
             self._pick_date(conn, phone, data, business_id, data["date"])
@@ -376,7 +452,8 @@ class Bot:
             return
         # Re-check the slot right before charging.
         if data["time"] not in available_slots(
-            conn, business_id, data["location_id"], service["duration_min"], data["date"]
+            conn, business_id, data["location_id"], service["duration_min"], data["date"],
+            staff_id=self._staff_filter(data),
         ):
             self.wa.send_text(conn, phone, "Sorry — that slot was just taken. Let's pick another:")
             self._pick_date(conn, phone, data, business_id, data["date"])
@@ -387,6 +464,18 @@ class Bot:
         travel_fee = float(service["travel_fee_ghs"]) if venue == "customer" else 0.0
         deposit_total = float(service["deposit_ghs"]) + travel_fee
         end_time = add_minutes(data["time"], int(service["duration_min"]))
+        requested = self._staff_filter(data)
+        if requested is not None:
+            assigned_staff: int | None = requested
+        else:
+            try:
+                assigned_staff = find_free_staff(
+                    conn, business_id, data["location_id"], data["date"], data["time"], end_time
+                )
+            except LookupError:
+                self.wa.send_text(conn, phone, "Sorry — that slot was just taken. Let's pick another:")
+                self._pick_date(conn, phone, data, business_id, data["date"])
+                return
 
         if self.payments.demo:
             reference = new_reference()
@@ -411,13 +500,14 @@ class Bot:
             dbmod.log_payment_event(conn, reference, "initialized", deposit_total)
 
         conn.execute(
-            "INSERT INTO bookings (business_id, location_id, service_id, venue, customer_address,"
-            " travel_fee_ghs, customer_name, customer_phone,"
+            "INSERT INTO bookings (business_id, location_id, staff_id, service_id, venue,"
+            " customer_address, travel_fee_ghs, customer_name, customer_phone,"
             " date, start_time, end_time, status, deposit_ghs, payment_ref, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 business_id,
                 data["location_id"],
+                assigned_staff,
                 service["id"],
                 venue,
                 address,

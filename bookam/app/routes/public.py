@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import db as dbmod
-from ..availability import MAX_DAYS_AHEAD, available_slots, now_utc
+from ..availability import MAX_DAYS_AHEAD, available_slots, find_free_staff, now_utc
 from ..bot import Bot
 from ..config import Settings
 from ..main import get_conn, get_payments, get_settings, templates
@@ -63,7 +63,9 @@ def discover(
     sql = (
         "SELECT b.*, COUNT(s.id) AS service_count,"
         " (SELECT GROUP_CONCAT(l.area, ' · ') FROM locations l"
-        "   WHERE l.business_id = b.id AND l.active = 1 AND l.area != '') AS areas"
+        "   WHERE l.business_id = b.id AND l.active = 1 AND l.area != '') AS areas,"
+        " (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.business_id = b.id) AS avg_rating,"
+        " (SELECT COUNT(*) FROM reviews r WHERE r.business_id = b.id) AS review_count"
         " FROM businesses b JOIN services s ON s.business_id = b.id AND s.active = 1"
     )
     params: list[str] = []
@@ -94,6 +96,20 @@ def booking_page(
         (business["id"],),
     ).fetchall()
     locations = dbmod.active_locations(conn, business["id"])
+    staff_by_location = {
+        l["id"]: [
+            {"id": s["id"], "name": s["name"]}
+            for s in conn.execute(
+                "SELECT * FROM staff WHERE location_id = ? AND active = 1 ORDER BY id",
+                (l["id"],),
+            ).fetchall()
+        ]
+        for l in locations
+    }
+    rating = conn.execute(
+        "SELECT ROUND(AVG(rating), 1) AS avg, COUNT(*) AS n FROM reviews WHERE business_id = ?",
+        (business["id"],),
+    ).fetchone()
     wa_link = ""
     if settings.wa_public_number:
         wa_link = f"https://wa.me/{settings.wa_public_number}?text=book%20{business['slug']}"
@@ -107,6 +123,8 @@ def booking_page(
             "today": now_utc().strftime("%Y-%m-%d"),
             "max_date": _max_date(),
             "wa_link": wa_link,
+            "staff_by_location": staff_by_location,
+            "rating": rating,
         },
     )
 
@@ -131,6 +149,7 @@ def slots_api(
     service_id: int,
     date: str,
     location_id: int | None = None,
+    staff_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_conn),
 ):
     business = _get_business(conn, slug)
@@ -139,9 +158,17 @@ def slots_api(
     _parse_date(date)
     if date > _max_date():
         return {"slots": []}
+    if staff_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM staff WHERE id = ? AND location_id = ? AND active = 1",
+            (staff_id, location["id"]),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Staff member not found")
     return {
         "slots": available_slots(
-            conn, business["id"], location["id"], service["duration_min"], date
+            conn, business["id"], location["id"], service["duration_min"], date,
+            staff_id=staff_id,
         )
     }
 
@@ -156,6 +183,7 @@ def book(
     customer_name: str = Form(...),
     customer_phone: str = Form(...),
     location_id: int | None = Form(None),
+    staff_id: int = Form(0),
     venue: str = Form("business"),
     customer_address: str = Form(""),
     conn: sqlite3.Connection = Depends(get_conn),
@@ -188,13 +216,34 @@ def book(
     travel_fee = float(service["travel_fee_ghs"]) if venue == "customer" else 0.0
     deposit_total = float(service["deposit_ghs"]) + travel_fee
 
+    requested_staff: int | None = None
+    if staff_id:
+        row = conn.execute(
+            "SELECT 1 FROM staff WHERE id = ? AND location_id = ? AND active = 1",
+            (staff_id, location["id"]),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Staff member not found")
+        requested_staff = staff_id
     if start_time not in available_slots(
-        conn, business["id"], location["id"], service["duration_min"], date
+        conn, business["id"], location["id"], service["duration_min"], date,
+        staff_id=requested_staff,
     ):
         return templates.TemplateResponse(
             request, "slot_taken.html", {"business": business}, status_code=409
         )
     end_time = add_minutes(start_time, int(service["duration_min"]))
+    if requested_staff is not None:
+        assigned_staff: int | None = requested_staff
+    else:
+        try:
+            assigned_staff = find_free_staff(
+                conn, business["id"], location["id"], date, start_time, end_time
+            )
+        except LookupError:
+            return templates.TemplateResponse(
+                request, "slot_taken.html", {"business": business}, status_code=409
+            )
     callback_url = f"{settings.base_url}/pay/callback"
     try:
         init = payments.initialize(
@@ -206,13 +255,14 @@ def book(
         raise HTTPException(status_code=502, detail="Payment service unavailable, try again")
     dbmod.log_payment_event(conn, init.reference, "initialized", deposit_total)
     conn.execute(
-        "INSERT INTO bookings (business_id, location_id, service_id, venue, customer_address,"
-        " travel_fee_ghs, customer_name, customer_phone,"
+        "INSERT INTO bookings (business_id, location_id, staff_id, service_id, venue,"
+        " customer_address, travel_fee_ghs, customer_name, customer_phone,"
         " date, start_time, end_time, status, deposit_ghs, payment_ref, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
         (
             business["id"],
             location["id"],
+            assigned_staff,
             service["id"],
             venue,
             customer_address,
@@ -335,11 +385,50 @@ def booking_detail(
         + float(booking["travel_fee_ghs"])
         - float(booking["deposit_ghs"])
     )
+    review = conn.execute(
+        "SELECT * FROM reviews WHERE booking_id = ?", (booking["id"],)
+    ).fetchone()
+    staff_name = None
+    if booking["staff_id"]:
+        row = conn.execute(
+            "SELECT name FROM staff WHERE id = ?", (booking["staff_id"],)
+        ).fetchone()
+        staff_name = row["name"] if row else None
     return templates.TemplateResponse(
         request,
         "confirmed.html",
-        {"business": business, "booking": booking, "balance": balance},
+        {
+            "business": business,
+            "booking": booking,
+            "balance": balance,
+            "review": review,
+            "staff_name": staff_name,
+        },
     )
+
+
+@router.post("/booking/{reference}/review", response_class=HTMLResponse)
+def submit_review(
+    request: Request,
+    reference: str,
+    rating: int = Form(...),
+    comment: str = Form(""),
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    booking = conn.execute(
+        "SELECT * FROM bookings WHERE payment_ref = ? AND status = 'completed'", (reference,)
+    ).fetchone()
+    if booking is None:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if rating < 1 or rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be 1 to 5")
+    conn.execute(
+        "INSERT OR IGNORE INTO reviews (booking_id, business_id, rating, comment, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (booking["id"], booking["business_id"], rating, comment.strip()[:300], dbmod.now_iso()),
+    )
+    conn.commit()
+    return RedirectResponse(f"/booking/{reference}", status_code=303)
 
 
 @router.post("/booking/{reference}/cancel", response_class=HTMLResponse)

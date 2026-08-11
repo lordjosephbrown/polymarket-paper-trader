@@ -50,7 +50,7 @@ def booking_cancelled(conn: sqlite3.Connection, wa: WhatsAppClient, booking_id: 
 STATUS_MESSAGES = {
     "on_the_way": "🚗 {business} is on the way to you for your {service} appointment!",
     "in_progress": "💈 Your {service} appointment with {business} has started.",
-    "completed": "🌟 All done! Thanks for booking {service} with {business}. See you next time!",
+    "completed": "🌟 All done! Thanks for booking {service} with {business}. How was it? Reply \"rate 5\" (1–5) to rate your experience.",
     "no_show": "We're sorry we missed you for your {service} appointment with {business}.",
 }
 

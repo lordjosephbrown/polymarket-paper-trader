@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id),
     location_id INTEGER REFERENCES locations(id),
+    staff_id INTEGER REFERENCES staff(id),
     service_id INTEGER NOT NULL REFERENCES services(id),
     venue TEXT NOT NULL DEFAULT 'business',   -- where it happens
     customer_address TEXT NOT NULL DEFAULT '',-- for home visits
@@ -91,6 +92,27 @@ CREATE TABLE IF NOT EXISTS broadcasts (
     business_id INTEGER NOT NULL REFERENCES businesses(id),
     message TEXT NOT NULL,
     sent_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+-- Staff members (optional). No staff rows = solo business, capacity 1 per
+-- location. With staff, a location can take as many overlapping bookings as
+-- it has active staff, and customers may request a specific person.
+CREATE TABLE IF NOT EXISTS staff (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    location_id INTEGER NOT NULL REFERENCES locations(id),
+    name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+-- One review per completed booking, collected via WhatsApp or the receipt page.
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL UNIQUE REFERENCES bookings(id),
+    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    rating INTEGER NOT NULL,           -- 1..5
+    comment TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 
@@ -148,6 +170,7 @@ MIGRATIONS = [
     "ALTER TABLE bookings ADD COLUMN customer_address TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE bookings ADD COLUMN travel_fee_ghs REAL NOT NULL DEFAULT 0",
     "ALTER TABLE hours ADD COLUMN location_id INTEGER REFERENCES locations(id)",
+    "ALTER TABLE bookings ADD COLUMN staff_id INTEGER REFERENCES staff(id)",
 ]
 
 VENUES = {"business", "customer", "both"}

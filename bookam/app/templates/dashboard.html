@@ -34,7 +34,7 @@
     {% for b in todays %}
     <li class="booking status-{{ b['status'] }}">
       <div class="booking-main">
-        <strong>{{ b['start_time'] }}–{{ b['end_time'] }}</strong> · {{ b['service_name'] }}<br>
+        <strong>{{ b['start_time'] }}–{{ b['end_time'] }}</strong> · {{ b['service_name'] }}{% if b['staff_name'] %} · <span class="badge">{{ b['staff_name'] }}</span>{% endif %}<br>
         <span>{{ b['customer_name'] }} · <a href="tel:{{ b['customer_phone'] }}">{{ b['customer_phone'] }}</a></span>
         {% if b['venue'] == 'customer' %}<br><span class="small">🏠 {{ b['customer_address'] }}</span>{% endif %}
         <span class="badge">{{ b['status'].replace('_', ' ') }}</span>

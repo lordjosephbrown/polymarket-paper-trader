@@ -107,12 +107,12 @@ class TestReminders:
     def test_reminder_sent_once_within_window(self, client):
         signup(client)
         add_service(client)
-        soon = (datetime.now(timezone.utc) + timedelta(minutes=90)).strftime("%H:%M")
-        # Guard against the window crossing midnight during a test run.
-        now = datetime.now(timezone.utc).strftime("%H:%M")
-        if soon < now:
-            return
-        self._insert_confirmed(client, soon)
+        soon_dt = datetime.now(timezone.utc) + timedelta(minutes=90)
+        soon = soon_dt.strftime("%H:%M")
+        # If 90 minutes from now lands after midnight, the booking is dated tomorrow —
+        # the scan handles the midnight-crossing window either way.
+        offset = 1 if soon_dt.date() != datetime.now(timezone.utc).date() else 0
+        self._insert_confirmed(client, soon, date_offset_days=offset)
         settings = client.app.state.settings
         sent = scan_and_send(settings.db_path, client.app.state.wa)
         assert sent == 1

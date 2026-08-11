@@ -20,16 +20,26 @@ def scan_and_send(db_path: str, wa: WhatsAppClient) -> int:
     booking is reminded at most once (the `reminded` flag).
     """
     now = now_utc()
+    window_end_dt = now + timedelta(hours=REMINDER_WINDOW_HOURS)
     today = now.strftime("%Y-%m-%d")
-    window_end = (now + timedelta(hours=REMINDER_WINDOW_HOURS)).strftime("%H:%M")
     now_hhmm = now.strftime("%H:%M")
+    window_end = window_end_dt.strftime("%H:%M")
     conn = dbmod.connect(db_path)
     try:
-        due = conn.execute(
-            "SELECT id FROM bookings WHERE status = 'confirmed' AND reminded = 0"
-            " AND date = ? AND start_time >= ? AND start_time <= ?",
-            (today, now_hhmm, window_end),
-        ).fetchall()
+        if window_end_dt.strftime("%Y-%m-%d") == today:
+            due = conn.execute(
+                "SELECT id FROM bookings WHERE status = 'confirmed' AND reminded = 0"
+                " AND date = ? AND start_time >= ? AND start_time <= ?",
+                (today, now_hhmm, window_end),
+            ).fetchall()
+        else:
+            # Window crosses midnight: late-tonight slots plus early-tomorrow slots.
+            tomorrow = window_end_dt.strftime("%Y-%m-%d")
+            due = conn.execute(
+                "SELECT id FROM bookings WHERE status = 'confirmed' AND reminded = 0"
+                " AND ((date = ? AND start_time >= ?) OR (date = ? AND start_time <= ?))",
+                (today, now_hhmm, tomorrow, window_end),
+            ).fetchall()
         for row in due:
             claimed = conn.execute(
                 "UPDATE bookings SET reminded = 1 WHERE id = ? AND reminded = 0", (row["id"],)

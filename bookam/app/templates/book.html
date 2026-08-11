@@ -3,6 +3,7 @@
 {% block content %}
 <div class="card narrow">
   <h1>{{ business['name'] }}</h1>
+  {% if rating and rating['n'] %}<p class="muted">⭐ {{ rating['avg'] }} ({{ rating['n'] }} review{{ 's' if rating['n'] != 1 }})</p>{% endif %}
   {% if business['location'] %}<p class="muted">📍 {{ business['location'] }}</p>{% endif %}
   {% if business['about'] %}<p>{{ business['about'] }}</p>{% endif %}
   {% if wa_link %}
@@ -34,6 +35,12 @@
     {% else %}
     <input type="hidden" name="location_id" id="location" value="{{ locations[0]['id'] if locations else '' }}">
     {% endif %}
+
+    <label id="staff-row" hidden>Who would you like?
+      <select name="staff_id" id="staff">
+        <option value="0">Anyone available</option>
+      </select>
+    </label>
 
     <div id="venue-row" hidden>
       <label>Where should it happen?
@@ -74,8 +81,27 @@
 </div>
 
 <script>
+const STAFF_BY_LOCATION = {{ staff_by_location | tojson }};
 const service = document.getElementById('service');
 const locationEl = document.getElementById('location');
+const staffRow = document.getElementById('staff-row');
+const staffEl = document.getElementById('staff');
+
+function updateStaffUI() {
+  const members = STAFF_BY_LOCATION[locationEl.value] || [];
+  if (members.length < 2) {
+    staffRow.hidden = true;
+    staffEl.value = '0';
+    return;
+  }
+  staffEl.innerHTML = '<option value="0">Anyone available</option>';
+  for (const m of members) {
+    const opt = document.createElement('option');
+    opt.value = m.id; opt.textContent = m.name;
+    staffEl.appendChild(opt);
+  }
+  staffRow.hidden = false;
+}
 const venueRow = document.getElementById('venue-row');
 const venueEl = document.getElementById('venue');
 const addressRow = document.getElementById('address-row');
@@ -117,7 +143,8 @@ async function loadSlots() {
   slotEl.disabled = true;
   slotEl.innerHTML = '<option>Loading…</option>';
   const loc = locationEl.value ? `&location_id=${locationEl.value}` : '';
-  const res = await fetch(`/b/{{ business['slug'] }}/slots?service_id=${service.value}&date=${dateEl.value}${loc}`);
+  const stf = staffEl.value !== '0' ? `&staff_id=${staffEl.value}` : '';
+  const res = await fetch(`/b/{{ business['slug'] }}/slots?service_id=${service.value}&date=${dateEl.value}${loc}${stf}`);
   const data = await res.json();
   slotEl.innerHTML = '';
   if (data.slots.length === 0) {
@@ -136,7 +163,9 @@ async function loadSlots() {
 
 service.addEventListener('change', () => { updateVenueUI(); loadSlots(); });
 venueEl.addEventListener('change', updateVenueUI);
-locationEl.addEventListener('change', loadSlots);
+locationEl.addEventListener('change', () => { updateStaffUI(); loadSlots(); });
+staffEl.addEventListener('change', loadSlots);
 dateEl.addEventListener('change', loadSlots);
+updateStaffUI();
 </script>
 {% endblock %}

@@ -27,11 +27,14 @@ def compute_slots(
     *,
     not_before: str | None = None,
     step_min: int = SLOT_STEP_MIN,
+    capacity: int = 1,
 ) -> list[str]:
     """Available start times "HH:MM" for a service of duration_min.
 
     busy: list of (start, end) intervals already booked.
     not_before: exclude slots starting before this time (for today's date).
+    capacity: concurrent bookings the calendar can hold (= staff head-count);
+    a start is free while fewer than `capacity` busy intervals overlap it.
     """
     open_m = _to_minutes(open_time)
     close_m = _to_minutes(close_time)
@@ -42,7 +45,8 @@ def compute_slots(
     start = open_m
     while start + duration_min <= close_m:
         end = start + duration_min
-        if start >= floor and not any(s < end and start < e for s, e in busy_m):
+        overlapping = sum(1 for s, e in busy_m if s < end and start < e)
+        if start >= floor and overlapping < capacity:
             slots.append(_to_hhmm(start))
         start += step_min
     return slots
@@ -57,6 +61,7 @@ def slots_for_date(
     now: datetime,
     *,
     min_notice_min: int = 30,
+    capacity: int = 1,
 ) -> list[str]:
     """Slots for a calendar date, excluding past times (plus notice period) when the date is today."""
     today = now.strftime("%Y-%m-%d")
@@ -68,4 +73,6 @@ def slots_for_date(
         if cutoff.strftime("%Y-%m-%d") != today:
             return []  # notice period pushes past midnight
         not_before = cutoff.strftime("%H:%M")
-    return compute_slots(open_time, close_time, duration_min, busy, not_before=not_before)
+    return compute_slots(
+        open_time, close_time, duration_min, busy, not_before=not_before, capacity=capacity
+    )
