@@ -100,6 +100,9 @@ class Bot:
         if rate_match:
             self._rate(conn, phone, int(rate_match.group(1)), (rate_match.group(2) or "").strip())
             return
+        if state == "idle" and lower in {"yes", "1", "confirm", "yes o", "yeah", "yep"}:
+            self._confirm_attendance(conn, phone)
+            return
         if lower in {"stop", "unsubscribe"}:
             conn.execute(
                 "INSERT OR IGNORE INTO broadcast_optouts (phone, created_at) VALUES (?, ?)",
@@ -334,6 +337,37 @@ class Bot:
     def _staff_filter(self, data: dict) -> int | None:
         staff_id = data.get("staff_id")
         return staff_id if staff_id else None
+
+    def _confirm_attendance(self, conn: sqlite3.Connection, phone: str) -> None:
+        """Handle the reply to 'Reply YES to confirm' in the reminder. The reply
+        also reopens the free 24h service window, so the day's status updates
+        (on the way / started / done) cost nothing."""
+        today = now_utc().strftime("%Y-%m-%d")
+        wa_fmt, local_fmt = _phone_variants(phone)
+        booking = conn.execute(
+            "SELECT b.*, biz.name AS business_name FROM bookings b"
+            " JOIN businesses biz ON biz.id = b.business_id"
+            " WHERE b.customer_phone IN (?, ?) AND b.date = ? AND b.status = 'confirmed'"
+            " ORDER BY b.start_time LIMIT 1",
+            (wa_fmt, local_fmt, today),
+        ).fetchone()
+        if booking is None:
+            self._greet(conn, phone)
+            return
+        self.wa.send_text(
+            conn,
+            phone,
+            f"Great — see you at {booking['start_time']}! 👍 {booking['business_name']} "
+            "is expecting you.",
+        )
+        business = conn.execute(
+            "SELECT * FROM businesses WHERE id = ?", (booking["business_id"],)
+        ).fetchone()
+        self.wa.send_text(
+            conn,
+            business["phone"],
+            f"👍 {booking['customer_name']} confirmed they're coming at {booking['start_time']}.",
+        )
 
     def _rate(self, conn: sqlite3.Connection, phone: str, rating: int, comment: str) -> None:
         wa_fmt, local_fmt = _phone_variants(phone)

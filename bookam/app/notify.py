@@ -114,5 +114,6 @@ def booking_reminder(conn: sqlite3.Connection, wa: WhatsAppClient, booking_id: i
         f"⏰ Reminder: {booking['service_name']} with {business['name']} today at "
         f"{booking['start_time']}"
         + (f" ({business['location']})" if business["location"] else "")
-        + f". Balance due: GHS {float(booking['price_ghs']) - float(booking['deposit_ghs']):g}.",
+        + f". Balance due: GHS {float(booking['price_ghs']) - float(booking['deposit_ghs']):g}."
+        " Reply YES to confirm you're coming 👍",
     )

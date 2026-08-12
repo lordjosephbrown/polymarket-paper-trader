@@ -118,6 +118,47 @@ class TestDeliveryTracking:
         wa_text(client, "status")
         assert any("no upcoming bookings" in t for t in outbox_texts(client, CUSTOMER_WA))
 
+    def test_reply_yes_confirms_attendance(self, client):
+        signup(client)
+        add_service(client)
+        insert_booking(client, today=True)  # confirmed, today 10:00
+        wa_text(client, "YES")
+        # Customer gets the see-you message; business is told they confirmed.
+        assert any("see you at 10:00" in t for t in outbox_texts(client, CUSTOMER_WA))
+        assert any(
+            "confirmed they're coming" in t for t in outbox_texts(client, "233241234567")
+        )
+
+    def test_reply_yes_without_booking_greets(self, client):
+        signup(client)
+        wa_text(client, "yes")
+        assert any("Welcome to Bookam" in t for t in outbox_texts(client, CUSTOMER_WA))
+
+    def test_reminder_asks_for_confirmation(self, client):
+        signup(client)
+        add_service(client)
+        from datetime import datetime, timedelta, timezone
+
+        from app.reminders import scan_and_send
+
+        soon_dt = datetime.now(timezone.utc) + timedelta(minutes=90)
+        conn = sqlite3.connect(client.app.state.settings.db_path)
+        conn.execute(
+            "INSERT INTO bookings (business_id, location_id, service_id, customer_name,"
+            " customer_phone, date, start_time, end_time, status, deposit_ghs, payment_ref, created_at)"
+            " VALUES (1, 1, 1, 'Ama', '233209876543', ?, ?, ?, 'confirmed', 50, 'rem_ref', ?)",
+            (
+                soon_dt.strftime("%Y-%m-%d"),
+                soon_dt.strftime("%H:%M"),
+                soon_dt.strftime("%H:%M"),
+                dbmod.now_iso(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        scan_and_send(client.app.state.settings.db_path, client.app.state.wa)
+        assert any("Reply YES to confirm" in t for t in outbox_texts(client, CUSTOMER_WA))
+
 
 class TestBusinessChanges:
     def test_reschedule_notifies_and_moves_slot(self, client):
