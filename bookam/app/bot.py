@@ -87,6 +87,14 @@ class Bot:
         lower = text.lower()
         state, data, business_id = _load_conversation(conn, phone)
 
+        if text == "__voice_note__":
+            self.wa.send_text(
+                conn,
+                phone,
+                "🎙️ Sorry, I can't listen to voice notes yet — please type it or tap "
+                "the buttons instead.",
+            )
+            return
         if lower.startswith("book"):
             self._start_booking(conn, phone, lower)
             return

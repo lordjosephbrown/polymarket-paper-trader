@@ -58,6 +58,15 @@ def _extract_messages(payload: dict) -> list[tuple[str, str, str]]:
                     interactive = msg.get("interactive", {})
                     reply = interactive.get("list_reply") or interactive.get("button_reply") or {}
                     text = reply.get("id", "")
+                elif kind == "location":
+                    # A shared pin — render as an address-friendly string with a maps link.
+                    loc = msg.get("location", {})
+                    lat, lon = loc.get("latitude"), loc.get("longitude")
+                    parts = [p for p in (loc.get("name", ""), loc.get("address", "")) if p]
+                    label = ", ".join(parts)
+                    text = (label + " — " if label else "") + f"📍 https://maps.google.com/?q={lat},{lon}"
+                elif kind in ("audio", "voice"):
+                    text = "__voice_note__"
                 else:
                     text = ""
                 out.append((sender, text, names.get(sender, "")))

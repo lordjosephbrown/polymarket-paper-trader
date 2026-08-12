@@ -299,6 +299,72 @@ class TestWebhookPlumbing:
         assert "Welcome to Bookam" in last_message_text(client)
 
 
+class TestRichMessageTypes:
+    def test_location_pin_accepted_as_home_visit_address(self, client):
+        signup(client)
+        client.post(
+            "/dashboard/services",
+            data={
+                "name": "Bridal makeup", "duration_min": "90", "price_ghs": "400",
+                "deposit_ghs": "100", "venue": "customer", "travel_fee_ghs": "30",
+            },
+            follow_redirects=False,
+        )
+        open_all_days(client)
+        wa_text(client, "book adjoa-s-beauty-bar")
+        wa_reply(client, "svc:1")  # home-only service → asked for address
+        assert "Where should they come" in last_message_text(client)
+
+        # Customer shares a location pin instead of typing.
+        client.post(
+            "/wa/webhook",
+            json={"entry": [{"changes": [{"value": {"messages": [{
+                "from": CUSTOMER,
+                "type": "location",
+                "location": {"latitude": 5.6037, "longitude": -0.187, "name": "A&C Mall",
+                             "address": "East Legon, Accra"},
+            }]}}]}]},
+        )
+        # Bot moved on to day selection; the pin became the address.
+        last = outbox(client)[-1]["body"]
+        assert last["interactive"]["action"]["sections"][0]["rows"][0]["id"].startswith("date:")
+        day_id = last["interactive"]["action"]["sections"][0]["rows"][1]["id"]
+        wa_reply(client, day_id)
+        wa_reply(client, "time:10:00")
+        wa_text(client, "Ama Serwaa")
+        conn = sqlite3.connect(client.app.state.settings.db_path)
+        conn.row_factory = sqlite3.Row
+        booking = conn.execute("SELECT * FROM bookings").fetchone()
+        conn.close()
+        assert "A&C Mall" in booking["customer_address"]
+        assert "maps.google.com/?q=5.6037,-0.187" in booking["customer_address"]
+
+    def test_voice_note_gets_polite_fallback(self, client):
+        setup_business(client)
+        client.post(
+            "/wa/webhook",
+            json={"entry": [{"changes": [{"value": {"messages": [{
+                "from": CUSTOMER, "type": "audio", "audio": {"id": "media123"},
+            }]}}]}]},
+        )
+        assert "can't listen to voice notes" in last_message_text(client)
+
+    def test_voice_note_mid_flow_keeps_conversation(self, client):
+        setup_business(client)
+        wa_text(client, "book adjoa-s-beauty-bar")
+        client.post(
+            "/wa/webhook",
+            json={"entry": [{"changes": [{"value": {"messages": [{
+                "from": CUSTOMER, "type": "audio", "audio": {"id": "media123"},
+            }]}}]}]},
+        )
+        assert "can't listen to voice notes" in last_message_text(client)
+        # The conversation survives: picking a service still works.
+        wa_reply(client, "svc:1")
+        last = outbox(client)[-1]["body"]
+        assert last["interactive"]["action"]["sections"][0]["rows"][0]["id"].startswith("date:")
+
+
 class TestConversationExpiry:
     def test_stale_conversation_resets(self, client):
         setup_business(client)
