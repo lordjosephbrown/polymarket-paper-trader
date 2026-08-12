@@ -299,6 +299,44 @@ class TestWebhookPlumbing:
         assert "Welcome to Bookam" in last_message_text(client)
 
 
+class TestFindCommand:
+    def test_find_by_area_lists_businesses(self, client):
+        setup_business(client)
+        wa_text(client, "find osu")
+        last = outbox(client)[-1]["body"]
+        rows = last["interactive"]["action"]["sections"][0]["rows"]
+        assert rows[0]["id"] == "book adjoa-s-beauty-bar"
+        assert "Adjoa" in rows[0]["title"]
+
+    def test_find_by_service_name(self, client):
+        setup_business(client)
+        wa_text(client, "find braids")
+        last = outbox(client)[-1]["body"]
+        assert "adjoa" in json.dumps(last)
+
+    def test_find_result_tap_starts_booking(self, client):
+        setup_business(client)
+        wa_text(client, "find osu")
+        row_id = outbox(client)[-1]["body"]["interactive"]["action"]["sections"][0]["rows"][0]["id"]
+        wa_reply(client, row_id)
+        last = outbox(client)[-1]["body"]
+        assert last["interactive"]["action"]["sections"][0]["rows"][0]["id"] == "svc:1"
+
+    def test_find_no_results(self, client):
+        setup_business(client)
+        wa_text(client, "find timbuktu")
+        assert "Nothing found" in last_message_text(client)
+
+    def test_bare_find_gives_hint(self, client):
+        wa_text(client, "find")
+        assert "What are you looking for" in last_message_text(client)
+
+    def test_find_excludes_serviceless_businesses(self, client):
+        signup(client)  # no services yet
+        wa_text(client, "find osu")
+        assert "Nothing found" in last_message_text(client)
+
+
 class TestRichMessageTypes:
     def test_location_pin_accepted_as_home_visit_address(self, client):
         signup(client)

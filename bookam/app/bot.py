@@ -98,6 +98,9 @@ class Bot:
         if lower.startswith("book"):
             self._start_booking(conn, phone, lower)
             return
+        if lower.startswith("find") or lower in {"discover", "search"}:
+            self._find(conn, phone, lower.removeprefix("find").strip())
+            return
         if lower in {"cancel", "cancel booking"}:
             self._offer_cancellations(conn, phone)
             return
@@ -154,13 +157,65 @@ class Bot:
 
     # -- steps -------------------------------------------------------------
 
+    def _find(self, conn: sqlite3.Connection, phone: str, query: str) -> None:
+        """In-chat discovery: 'find braids', 'find osu', 'find barber'."""
+        if not query:
+            self.wa.send_text(
+                conn,
+                phone,
+                "🔎 What are you looking for? Try: find braids · find barber · find Osu",
+            )
+            return
+        like = f"%{query}%"
+        rows = conn.execute(
+            "SELECT b.*, "
+            " (SELECT GROUP_CONCAT(l.area, ' · ') FROM locations l"
+            "   WHERE l.business_id = b.id AND l.active = 1 AND l.area != '') AS areas,"
+            " (SELECT ROUND(AVG(r.rating), 1) FROM reviews r WHERE r.business_id = b.id) AS avg_rating,"
+            " (SELECT COUNT(*) FROM reviews r WHERE r.business_id = b.id) AS review_count"
+            " FROM businesses b"
+            " WHERE EXISTS (SELECT 1 FROM services s WHERE s.business_id = b.id AND s.active = 1)"
+            " AND (b.name LIKE ? OR b.category LIKE ? OR b.location LIKE ?"
+            "  OR EXISTS (SELECT 1 FROM services s WHERE s.business_id = b.id"
+            "             AND s.active = 1 AND s.name LIKE ?)"
+            "  OR EXISTS (SELECT 1 FROM locations l WHERE l.business_id = b.id"
+            "             AND l.active = 1 AND l.area LIKE ?))"
+            " ORDER BY (SELECT COUNT(*) FROM reviews r WHERE r.business_id = b.id) DESC,"
+            " b.created_at DESC LIMIT 8",
+            (like, like, like, like, like),
+        ).fetchall()
+        if not rows:
+            self.wa.send_text(
+                conn,
+                phone,
+                f"😔 Nothing found for \"{query}\". Try another area or service, "
+                f"or browse everything: {self.settings.base_url}/discover",
+            )
+            return
+        options = []
+        for b in rows:
+            stars = f"⭐ {b['avg_rating']} ({b['review_count']}) · " if b["avg_rating"] else ""
+            desc = stars + (b["areas"] or b["location"] or "")
+            options.append({"id": f"book {b['slug']}", "title": b["name"][:24], "description": desc[:72]})
+        self.wa.send(
+            conn,
+            phone,
+            list_message(
+                f"Here's what I found for *{query}* — tap one to book:",
+                "Choose business",
+                options,
+                header="Businesses",
+            ),
+        )
+
     def _greet(self, conn: sqlite3.Connection, phone: str) -> None:
         self.wa.send_text(
             conn,
             phone,
-            "👋 Welcome to Bookam! To book an appointment, tap the business's booking "
-            "link, or send: book <business-code> (e.g. \"book adjoas-beauty-bar\"). "
-            "Send \"status\" to check your bookings, or \"cancel\" to cancel one.",
+            "👋 Welcome to Bookam! Tap a business's booking link, or:\n"
+            "🔎 \"find braids\" / \"find Osu\" — discover businesses\n"
+            "📋 \"status\" — check your bookings\n"
+            "❌ \"cancel\" — cancel a booking",
         )
 
     def _start_booking(self, conn: sqlite3.Connection, phone: str, lower_text: str) -> None:
