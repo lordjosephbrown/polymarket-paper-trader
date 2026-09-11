@@ -95,3 +95,9 @@ mcp_server.py → engine.py (trading tools, 30 MCP tools)
 - Atomic commits: one logical change per commit
 - Run tests before committing
 - If rebase fails twice, reset and cherry-pick instead
+
+## Sub-projects
+
+- `thetadesk/` — options premium-selling paper desk (CLI + MCP server). Self-contained: own
+  `pyproject.toml`, README, and tests. Run its suite with `cd thetadesk && python3 -m pytest -q`.
+  Nothing in `pm_trader` depends on it.
