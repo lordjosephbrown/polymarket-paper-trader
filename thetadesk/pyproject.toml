@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=78.1.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thetadesk"
+version = "0.1.0"
+description = "AI-assisted options premium-selling desk: scan, size, paper-trade, and manage short options. CLI + MCP server."
+authors = [{name = "agent-next"}]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["options", "premium-selling", "paper-trading", "mcp", "theta"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "click>=8.0",
+    "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+]
+
+[project.scripts]
+thetadesk = "thetadesk.cli:main"
+thetadesk-mcp = "thetadesk.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["thetadesk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+addopts = "--import-mode=importlib"
