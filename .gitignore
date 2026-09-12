@@ -6,7 +6,10 @@ build/
 .venv/
 .pytest_cache/
 *.db
-.claude/settings.json
+*.db-wal
+*.db-shm
+!thetadesk/journal/**/*.db
+thetadesk/journal/work/
 .claude/settings.local.json
 .claude/projects/
 .claude/plans/

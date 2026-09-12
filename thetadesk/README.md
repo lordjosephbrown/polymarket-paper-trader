@@ -102,6 +102,23 @@ fresh chain JSON ──► manage_positions ──► CLOSE / EXPIRE / ASSIGN (a
 Going live is deliberately outside this tool: once the paper record is convincing, the
 human reviews and places real orders through the broker's own order tools.
 
+### Automated daily run
+
+The repository ships a playbook for running the loop unattended:
+`.claude/skills/theta-daily/SKILL.md`. A scheduled Claude Code session follows it every
+weekday after the close: pull the watchlist's chains through the Robinhood connector
+(read-only tools only), apply the management rules, open new cash-secured puts under
+fixed sizing rules, write a report, and commit the ledger, chain snapshots and report to the
+`theta-journal` branch so the paper record survives between sessions. Rolls are never
+executed automatically; the report flags them. The watchlist and the sizing rules are
+plain text at the top of the playbook.
+
+An unattended session can only call the read-only Robinhood tools without stopping for a
+permission prompt if the project settings pre-approve them. The rules are in
+`examples/claude-settings.example.json`: copy it to `.claude/settings.json` at the repository
+root and commit it. The same file denies every order, account, position and mutation tool, so
+the desk stays paper even if a session is told otherwise.
+
 ## Chain JSON
 
 ```json
