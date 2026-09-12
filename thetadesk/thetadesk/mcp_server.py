@@ -29,6 +29,7 @@ from thetadesk.models import (
     parse_chains,
     to_jsonable,
 )
+from thetadesk.robinhood import build_chain
 from thetadesk.rules import ManagementRules
 from thetadesk.scanner import ScanFilters, size_position
 
@@ -178,8 +179,38 @@ def chain_format() -> str:
         "iv and delta are optional: missing IV is implied from the mid, missing delta is computed.",
         "Rows without any price (bid/ask/mark) are skipped and counted in skipped_rows.",
         "Pass one chain object, or a list of chain objects, or the same as a JSON string.",
+        "Robinhood users: pass get_option_instruments and get_option_quotes output to "
+        "chain_from_robinhood instead of reshaping by hand.",
     ]
     return _ok({"example": example, "notes": notes})
+
+
+@mcp.tool()
+def chain_from_robinhood(
+    underlying: str,
+    spot: float | dict | str,
+    instruments: list[dict] | dict | str,
+    quotes: list[dict] | dict | str,
+    as_of: str | None = None,
+    earnings_date: str | None = None,
+    iv_rank: float | None = None,
+) -> str:
+    """Join Robinhood option payloads into a chain every other tool accepts.
+
+    instruments: get_option_instruments output (one page, a list of pages, or
+    the bare instrument rows). quotes: get_option_quotes output, same forms.
+    spot: a number or the get_equity_quotes payload for the underlying.
+    Contracts without a quote are dropped; counts are reported under unmatched.
+    """
+    try:
+        return _ok(
+            build_chain(
+                underlying, spot, instruments, quotes,
+                as_of=as_of, earnings_date=earnings_date, iv_rank=iv_rank,
+            )
+        )
+    except Exception as e:
+        return _err_from(e)
 
 
 @mcp.tool()

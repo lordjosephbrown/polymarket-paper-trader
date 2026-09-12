@@ -228,3 +228,40 @@ class TestMcpCommand:
         with patch("thetadesk.mcp_server.main") as fake:
             result = runner.invoke(main, ["mcp"])
         assert result.exit_code == 0 and fake.called
+
+
+class TestChainFromRobinhood:
+    def _files(self, tmp_path: Path) -> tuple[str, str, str]:
+        inst = {"data": {"instruments": [
+            {"id": "a", "chain_symbol": "NBIS", "expiration_date": "2026-10-16", "strike_price": "200.0000", "type": "put", "state": "active"},
+        ], "next": None}}
+        quotes = {"data": {"results": [{"quote": {"instrument_id": "a", "bid_price": "9.85", "ask_price": "10.40",
+                                                   "implied_volatility": "0.78", "delta": "-0.27", "open_interest": 2008, "volume": 526}}]}}
+        spot = {"data": {"results": [{"quote": {"symbol": "NBIS", "last_trade_price": "224.43"}}]}}
+        paths = []
+        for name, payload in (("inst.json", inst), ("quotes.json", quotes), ("spot.json", spot)):
+            p = tmp_path / name
+            p.write_text(json.dumps(payload))
+            paths.append(str(p))
+        return tuple(paths)
+
+    def test_writes_chain_file(self, runner, data_dir, tmp_path):
+        inst, quotes, spot = self._files(tmp_path)
+        out = tmp_path / "NBIS.json"
+        result, payload = run(runner, data_dir, "chain-from-robinhood", "--underlying", "nbis", "--spot", spot,
+                              "--instruments", inst, "--quotes", quotes, "--as-of", "2026-09-12", "--earnings", "2026-11-10",
+                              "--iv-rank", "58", "--out", str(out))
+        assert result.exit_code == 0 and payload["data"]["options"] == 1
+        chain = json.loads(out.read_text())
+        assert chain["spot"] == 224.43 and chain["options"][0]["strike"] == 200.0 and chain["earnings_date"] == "2026-11-10"
+        result, payload = run(runner, data_dir, "scan", str(out), "--min-oi", "1")
+        assert result.exit_code == 0 and payload["data"]["returned"] == 1
+
+    def test_prints_chain_and_reports_errors(self, runner, data_dir, tmp_path):
+        inst, quotes, _ = self._files(tmp_path)
+        result, payload = run(runner, data_dir, "chain-from-robinhood", "--underlying", "NBIS", "--spot", "224.43",
+                              "--instruments", inst, "--quotes", quotes)
+        assert result.exit_code == 0 and payload["underlying"] == "NBIS" and len(payload["options"]) == 1
+        result, payload = run(runner, data_dir, "chain-from-robinhood", "--underlying", "NBIS", "--spot", "abc",
+                              "--instruments", inst, "--quotes", quotes)
+        assert result.exit_code == 1 and payload["code"] == "INVALID_CHAIN"

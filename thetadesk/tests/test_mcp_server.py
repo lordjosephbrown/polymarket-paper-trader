@@ -101,6 +101,18 @@ class TestResearchTools:
         data = ok(mcp_server.chain_format())
         assert data["example"]["underlying"] == "NBIS" and data["notes"]
 
+    def test_chain_from_robinhood(self):
+        instruments = {"data": {"instruments": [
+            {"id": "a", "chain_symbol": "HOOD", "expiration_date": "2026-10-16", "strike_price": "100.0000", "type": "put", "state": "active"},
+        ]}}
+        quotes = {"data": {"results": [{"quote": {"instrument_id": "a", "bid_price": "2.77", "ask_price": "3.05",
+                                                   "implied_volatility": "0.59", "delta": "-0.22", "open_interest": 4606, "volume": 1783}}]}}
+        data = ok(mcp_server.chain_from_robinhood("hood", 112.57, instruments, json.dumps(quotes), as_of="2026-09-12", earnings_date="2026-11-04"))
+        assert data["underlying"] == "HOOD" and data["options"][0]["bid"] == 2.77 and data["unmatched"]["contracts_without_quotes"] == 0
+        report = ok(mcp_server.scan_chains(data, min_open_interest=1))
+        assert report["returned"] == 1
+        assert err(mcp_server.chain_from_robinhood("HOOD", 0, instruments, quotes)) == "INVALID_CHAIN"
+
     def test_scan_forms(self, chain_dict):
         as_dict = ok(mcp_server.scan_chains(chain_dict, limit=3))
         as_list = ok(mcp_server.scan_chains([chain_dict], limit=3))
