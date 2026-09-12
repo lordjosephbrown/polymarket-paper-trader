@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # polymarket-paper-trader
 
-Paper trading simulator for Polymarket. Built for AI agents. Python 3.10+, SQLite, Click CLI, FastMCP.
+Paper trading simulator for Polymarket. Built for AI agents. Python 3.10+, SQLite, Click CLI, MCP Python SDK (works with 1.x `FastMCP` and 2.x `MCPServer`).
 
 ## Commands
 
@@ -95,3 +95,9 @@ mcp_server.py → engine.py (trading tools, 30 MCP tools)
 - Atomic commits: one logical change per commit
 - Run tests before committing
 - If rebase fails twice, reset and cherry-pick instead
+
+## Sub-projects
+
+- `thetadesk/` — options premium-selling paper desk (CLI + MCP server). Self-contained: own
+  `pyproject.toml`, README, and tests. Run its suite with `cd thetadesk && python3 -m pytest -q`.
+  Nothing in `pm_trader` depends on it.

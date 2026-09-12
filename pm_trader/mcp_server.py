@@ -10,13 +10,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+try:  # mcp >= 2.0 renamed FastMCP to MCPServer
+    from mcp.server.mcpserver import MCPServer as _Server
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as _Server
 
 from pm_trader.engine import Engine
 
 DEFAULT_DATA_DIR = Path.home() / ".pm-trader" / "default"
 
-mcp = FastMCP("pm-trader", json_response=True)
+mcp = _Server("pm-trader")
 
 # ---------------------------------------------------------------------------
 # Engine lifecycle — one Engine per server session
