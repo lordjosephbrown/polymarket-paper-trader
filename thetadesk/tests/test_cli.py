@@ -265,3 +265,33 @@ class TestChainFromRobinhood:
         result, payload = run(runner, data_dir, "chain-from-robinhood", "--underlying", "NBIS", "--spot", "abc",
                               "--instruments", inst, "--quotes", quotes)
         assert result.exit_code == 1 and payload["code"] == "INVALID_CHAIN"
+
+
+class TestChainFromCsv:
+    def _files(self, tmp_path: Path) -> tuple[str, str]:
+        contracts = tmp_path / "HOOD_contracts.csv"
+        contracts.write_text("id,expiry,strike,right\n53480429-af13-485b-84c5-ed1b71070b28,2026-10-16,100,put\n")
+        quotes = tmp_path / "HOOD_quotes.csv"
+        quotes.write_text("id,bid,ask,iv,delta,open_interest,volume\n53480429,2.77,3.05,0.59,-0.22,4606,1783\n")
+        return str(contracts), str(quotes)
+
+    def test_writes_chain_file_that_scans(self, runner, data_dir, tmp_path):
+        contracts, quotes = self._files(tmp_path)
+        out = tmp_path / "HOOD.json"
+        result, payload = run(runner, data_dir, "chain-from-csv", "--underlying", "hood", "--spot", "112.57",
+                              "--contracts", contracts, "--quotes", quotes, "--as-of", "2026-09-12",
+                              "--earnings", "2026-11-04", "--out", str(out))
+        assert result.exit_code == 0 and payload["data"]["options"] == 1
+        chain = json.loads(out.read_text())
+        assert chain["underlying"] == "HOOD" and chain["options"][0]["bid"] == 2.77 and chain["earnings_date"] == "2026-11-04"
+        result, payload = run(runner, data_dir, "scan", str(out))
+        assert result.exit_code == 0 and payload["data"]["returned"] == 1
+
+    def test_prints_chain_and_reports_errors(self, runner, data_dir, tmp_path):
+        contracts, quotes = self._files(tmp_path)
+        result, payload = run(runner, data_dir, "chain-from-csv", "--underlying", "HOOD", "--spot", "112.57",
+                              "--contracts", contracts, "--quotes", quotes)
+        assert result.exit_code == 0 and payload["underlying"] == "HOOD" and len(payload["options"]) == 1
+        result, payload = run(runner, data_dir, "chain-from-csv", "--underlying", "HOOD", "--spot", "112.57",
+                              "--contracts", quotes, "--quotes", quotes)
+        assert result.exit_code == 1 and payload["code"] == "INVALID_CHAIN" and "missing columns" in payload["error"]

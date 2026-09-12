@@ -86,8 +86,9 @@ fresh chain JSON ──► manage_positions ──► CLOSE / EXPIRE / ASSIGN (a
    you want, page by page → `get_option_quotes` for those contract ids, plus
    `get_equity_quotes` for spot and `get_earnings_results` for the next earnings date).
    Hand the raw pages to `chain_from_robinhood`; it joins contracts and quotes by
-   instrument id and returns the chain every other tool accepts. Any other source can
-   use the plain chain layout from `chain_format`.
+   instrument id and returns the chain every other tool accepts. When the agent has to
+   re-type the data, `chain_from_csv` takes two compact tables instead (see below). Any
+   other source can use the plain chain layout from `chain_format`.
 3. **Scan and pick.** `scan_chains` ranks every contract that passes the filters.
    `analyze_option` gives the full picture for one contract plus a size from the account's
    risk budget (default: 5% of the account per position).
@@ -101,44 +102,22 @@ fresh chain JSON ──► manage_positions ──► CLOSE / EXPIRE / ASSIGN (a
 Going live is deliberately outside this tool: once the paper record is convincing, the
 human reviews and places real orders through the broker's own order tools.
 
-### MCP setup
+### Automated daily run
 
-```bash
-thetadesk-mcp                 # stdio transport
-```
+The repository ships a playbook for running the loop unattended:
+`.claude/skills/theta-daily/SKILL.md`. A scheduled Claude Code session follows it every
+weekday after the close: pull the watchlist's chains through the Robinhood connector
+(read-only tools only), apply the management rules, open new cash-secured puts under
+fixed sizing rules, write a report, and commit the ledger, chain snapshots and report to the
+`theta-journal` branch so the paper record survives between sessions. Rolls are never
+executed automatically; the report flags them. The watchlist and the sizing rules are
+plain text at the top of the playbook.
 
-```json
-{
-  "mcpServers": {
-    "thetadesk": { "command": "thetadesk-mcp" }
-  }
-}
-```
-
-Set `THETADESK_DATA_DIR` to move the ledger (default `~/.thetadesk/<account>/paper.db`).
-Works with both the v1 (`FastMCP`) and v2 (`MCPServer`) MCP Python SDKs.
-
-### MCP tools
-
-| Tool | What it does |
-|------|--------------|
-| `init_account` | Create or reset the paper account (default $100k) |
-| `get_balance` | Cash, collateral in use, buying power, realized P&L |
-| `reset_account` | Wipe everything |
-| `chain_format` | The chain JSON layout, with an example |
-| `chain_from_robinhood` | Join Robinhood contract pages and quote pages into a chain |
-| `scan_chains` | Rank short-option candidates across one or more chains |
-| `analyze_option` | Greeks, probabilities, breakeven, return on collateral, position size |
-| `size_for` | Contracts that fit a per-position budget and buying power |
-| `paper_sell` | Sell to open at bid (or mid); reserves collateral |
-| `paper_close` | Buy to close at a price or at a fresh chain's ask |
-| `paper_roll` | Close and re-open at a later expiry (optionally a new strike) |
-| `paper_settle` | Expire worthless or cash-settle an assignment |
-| `paper_positions` | Open positions, marked and rule-checked against supplied chains |
-| `manage_positions` | Apply the management rules; execute closes/settlements with `apply` |
-| `stats` | Win rate, P&L, profit factor, max drawdown, breakdowns |
-| `journal` | Trade log, newest first |
-| `export_journal` | Trades or positions as JSON or CSV |
+An unattended session can only call the read-only Robinhood tools without stopping for a
+permission prompt if the project settings pre-approve them. The rules are in
+`examples/claude-settings.example.json`: copy it to `.claude/settings.json` at the repository
+root and commit it. The same file denies every order, account, position and mutation tool, so
+the desk stays paper even if a session is told otherwise.
 
 ## Chain JSON
 
@@ -185,6 +164,26 @@ Pages and batches can be passed as objects, lists, or JSON text. Inactive contra
 other symbols are ignored; the result reports contracts without quotes and quotes without
 contracts under `unmatched`. Quotes are only needed for the strikes you care about, so
 fetch quotes for the 10–30 delta zone rather than the whole chain.
+
+#### The compact CSV hand-off
+
+An agent that reads the connector's output and has to re-type it pays for every character.
+`chain_from_csv` (MCP) / `thetadesk chain-from-csv` (CLI) take the same data as two small
+tables, one row per contract, which is several times cheaper than passing the raw payloads:
+
+```
+id,expiry,strike,right                 # contracts: from get_option_instruments
+53480429-af13-485b-84c5-ed1b71070b28,2026-10-16,100,put
+
+id,bid,ask,iv,delta,open_interest,volume   # quotes: from get_option_quotes
+53480429,2.77,3.05,0.59,-0.22,4606,1783
+```
+
+The quote `id` may be a unique prefix of the contract id (the first 8 characters of a
+Robinhood instrument id are enough). Robinhood field names (`instrument_id`,
+`expiration_date`, `strike_price`, `type`, `bid_price`, ...) work as column aliases, and
+`iv`, `delta`, `open_interest`, `volume` are optional. The daily routine in
+`.claude/skills/theta-daily/SKILL.md` uses this path.
 
 ## How candidates are ranked
 
@@ -237,6 +236,7 @@ Rolls are never executed automatically.
 | `scan CHAIN... [filters] [--sort score\|annualized_roc\|pop\|credit\|dte] [--limit N]` | Rank candidates |
 | `analyze CHAIN --expiry D --strike K --right put\|call [--max-pct F]` | Full analysis + sizing |
 | `chain-from-robinhood --underlying X --spot S --instruments F... --quotes F... [--out FILE]` | Build a chain from Robinhood payloads |
+| `chain-from-csv --underlying X --spot S --contracts F --quotes F [--as-of D] [--earnings D] [--out FILE]` | Build a chain from compact CSV tables |
 | `sell CHAIN --expiry D --strike K --right R --contracts N [--fill bid\|mid] [--price P] [--notes ...]` | Sell to open |
 | `close ID [--price P \| --chain CHAIN] [--reason ...]` | Buy to close |
 | `roll ID --chain CHAIN --expiry D [--strike K]` | Roll out (and optionally to a new strike) |

@@ -9,7 +9,7 @@ import pytest
 
 from thetadesk import robinhood
 from thetadesk.models import InvalidChainError, parse_chain
-from thetadesk.robinhood import build_chain, spot_from_equity_quotes
+from thetadesk.robinhood import build_chain, chain_from_csv, spot_from_equity_quotes
 
 
 def instrument(ident: str, strike: float, right: str, expiry: str = "2026-10-16", symbol: str = "NBIS", state: str = "active") -> dict:
@@ -126,3 +126,65 @@ class TestBuildChain:
         assert robinhood._to_float("x") is None and robinhood._to_float("1.5") == 1.5
         assert robinhood._rows(None, ("results",)) == []
         assert robinhood._rows({"items": [{"a": 1}]}, ("results", "items")) == [{"a": 1}]
+
+
+CONTRACTS_CSV = """id,expiry,strike,right
+53480429-af13-485b-84c5-ed1b71070b28,2026-10-16,100,put
+71f31f48-8a43-43a9-b4af-db1e6e13eb44,2026-10-30,95,put
+71f31f48-0000-0000-0000-000000000000,2026-10-30,90,put
+"""
+QUOTES_CSV = """prefix,bid,ask,iv,delta,oi,volume
+53480429,2.77,3.05,0.59,-0.22,4606,1783
+71f31f48-8a43,1.9,2.2,,,,
+"""
+
+
+class TestChainFromCsv:
+    def test_joins_by_full_id_or_unique_prefix(self):
+        chain = chain_from_csv("hood", 112.57, CONTRACTS_CSV, QUOTES_CSV, as_of="2026-09-12", earnings_date="2026-11-04", iv_rank=40)
+        assert chain["underlying"] == "HOOD" and chain["spot"] == 112.57 and chain["source"] == "robinhood"
+        assert [o["strike"] for o in chain["options"]] == [100.0, 95.0]
+        first, second = chain["options"]
+        assert first["id"] == "53480429-af13-485b-84c5-ed1b71070b28" and first["expiry"] == "2026-10-16"
+        assert first["bid"] == 2.77 and first["ask"] == 3.05 and first["delta"] == -0.22
+        assert first["open_interest"] == 4606 and first["volume"] == 1783 and first["mark"] is None
+        assert second["iv"] is None and second["delta"] is None and second["open_interest"] == 0
+        assert chain["unmatched"] == {"contracts_without_quotes": 1, "quotes_without_contracts": 0}
+        assert chain["earnings_date"] == "2026-11-04" and chain["iv_rank"] == 40.0
+        assert len(parse_chain(chain).options) == 2
+
+    def test_accepts_robinhood_headers_any_case(self):
+        contracts = "Instrument_ID,expiration_date,strike_price,type\nabc,2026-10-16,200.0000,P\n"
+        quotes = ("instrument_id,bid_price,ask_price,implied_volatility,delta,open_interest,volume,mark_price\n"
+                  "abc,9.85,10.40,0.78,-0.27,2008,526,10.1\n")
+        (opt,) = chain_from_csv("NBIS", "224.43", contracts, quotes)["options"]
+        assert opt["right"] == "put" and opt["strike"] == 200.0 and opt["mark"] == 10.1 and opt["iv"] == 0.78
+
+    def test_unknown_quote_ids_are_counted_not_fatal(self):
+        chain = chain_from_csv("HOOD", 112.57, CONTRACTS_CSV, "id,bid,ask\nnope,1,2\n")
+        assert chain["options"] == [] and chain["unmatched"]["quotes_without_contracts"] == 1
+
+    def test_blank_rows_are_skipped(self):
+        chain = chain_from_csv("HOOD", 112.57, CONTRACTS_CSV + ",,,\n\n", QUOTES_CSV + "\n,1,2\n")
+        assert len(chain["options"]) == 2
+
+    @pytest.mark.parametrize(
+        "contracts, quotes, message",
+        [
+            ("", QUOTES_CSV, "contracts CSV is missing columns: id, expiry, strike, right"),
+            ("id,expiry,strike\na,2026-10-16,100\n", QUOTES_CSV, "missing columns: right"),
+            (CONTRACTS_CSV, "id,bid\na,1\n", "quotes CSV is missing columns: ask"),
+            (CONTRACTS_CSV, "id,bid,ask\n71f31f48,1,2\n", "matches 2 contracts"),
+            ("id,expiry,strike,right\na,2026-10-16,abc,put\n", QUOTES_CSV, "Invalid strike 'abc' for contract a"),
+            ("id,expiry,strike,right\na,2026-10-16,-5,put\n", QUOTES_CSV, "Invalid strike"),
+            ("id,expiry,strike,right\na,2026-10-16,100,straddle\n", QUOTES_CSV, "Invalid option right"),
+            ("id,expiry,strike,right\na,not-a-date,100,put\n", QUOTES_CSV, "Invalid date"),
+        ],
+    )
+    def test_invalid_csv(self, contracts, quotes, message):
+        with pytest.raises(InvalidChainError, match=message):
+            chain_from_csv("HOOD", 112.57, contracts, quotes)
+
+    def test_int_helper(self):
+        assert robinhood._to_int("") == 0 and robinhood._to_int(None) == 0
+        assert robinhood._to_int("4606") == 4606 and robinhood._to_int("1.0") == 1
