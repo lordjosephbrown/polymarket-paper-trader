@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Locations — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Your locations</h1>
+  <p class="muted small">Each branch has its own working hours and its own calendar — bookings at one branch don't block another. Customers pick the branch when they book.</p>
+  <ul class="services">
+    {% for l in locations %}
+    <li class="service">
+      <div>
+        <strong>{{ l['name'] }}</strong><br>
+        <span class="muted">{{ l['area'] or 'No area set' }}</span>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center">
+        <a class="btn btn-small" href="/dashboard/hours?location_id={{ l['id'] }}">Hours</a>
+        {% if locations | length > 1 %}
+        <form method="post" action="/dashboard/locations/{{ l['id'] }}/delete" class="inline">
+          <button class="btn btn-small btn-warn" onclick="return confirm('Close this branch? Its future bookings stay visible on the dashboard.')">Close</button>
+        </form>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="card">
+  <h2>Add a branch</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/dashboard/locations">
+    <label>Branch name
+      <input name="name" required maxlength="80" placeholder="e.g. Kumasi branch">
+    </label>
+    <label>Area (neighbourhood, city)
+      <input name="area" maxlength="120" placeholder="e.g. East Legon, Accra">
+    </label>
+    <button class="btn btn-primary wide" type="submit">Add branch</button>
+  </form>
+</div>
+{% endblock %}

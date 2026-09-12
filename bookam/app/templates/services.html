@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Services — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Your services</h1>
+  {% if services %}
+  <ul class="services">
+    {% for s in services %}
+    <li class="service">
+      <div>
+        <strong>{{ s['name'] }}</strong><br>
+        <span class="muted">{{ s['duration_min'] }} min · {{ s['price_ghs'] | ghs }} · deposit {{ s['deposit_ghs'] | ghs }}
+          {%- if s['venue'] == 'customer' %} · 🏠 home service{% if s['travel_fee_ghs'] %} ({{ s['travel_fee_ghs'] | ghs }} travel){% endif %}
+          {%- elif s['venue'] == 'both' %} · shop or 🏠 home{% if s['travel_fee_ghs'] %} (+{{ s['travel_fee_ghs'] | ghs }} travel){% endif %}
+          {%- endif %}</span>
+      </div>
+      <form method="post" action="/dashboard/services/{{ s['id'] }}/delete" class="inline">
+        <button class="btn btn-small btn-warn" onclick="return confirm('Remove this service?')">Remove</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No services yet — add your first one below. Clients can only book services you list here.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Add a service</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/dashboard/services">
+    <label>Service name
+      <input name="name" required maxlength="80" placeholder="e.g. Box braids (medium)">
+    </label>
+    <div class="row2">
+      <label>Duration (minutes)
+        <input name="duration_min" type="number" required min="5" max="480" step="5" placeholder="120">
+      </label>
+      <label>Full price (GH₵)
+        <input name="price_ghs" type="number" required min="0" step="0.01" placeholder="250">
+      </label>
+    </div>
+    <label>Deposit to book (GH₵)
+      <input name="deposit_ghs" type="number" required min="0" step="0.01" placeholder="50">
+    </label>
+    <label>Where does it happen?
+      <select name="venue" id="venue-select" onchange="document.getElementById('travel-fee-row').hidden = this.value === 'business'">
+        <option value="business">At my shop</option>
+        <option value="customer">I go to the customer</option>
+        <option value="both">Either — customer chooses</option>
+      </select>
+    </label>
+    <label id="travel-fee-row" hidden>Travel / callout fee (GH₵, added to the deposit for home visits)
+      <input name="travel_fee_ghs" type="number" min="0" step="0.01" value="0">
+    </label>
+    <p class="small muted">Tip: a deposit of 20–30% of the price is enough to stop no-shows.</p>
+    <button class="btn btn-primary wide" type="submit">Add service</button>
+  </form>
+</div>
+{% endblock %}

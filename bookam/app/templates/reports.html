@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Reports — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Reports</h1>
+  <h2>By month</h2>
+  {% if monthly %}
+  <div style="overflow-x:auto">
+    <table class="report-table">
+      <tr><th>Month</th><th>Bookings</th><th>Deposits</th><th>No-shows</th></tr>
+      {% for m in monthly %}
+      <tr><td>{{ m['month'] }}</td><td>{{ m['bookings'] }}</td><td>{{ m['deposits'] | ghs }}</td><td>{{ m['no_shows'] }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}<p class="muted">No completed bookings yet.</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Top services</h2>
+  {% if top_services %}
+  <table class="report-table">
+    <tr><th>Service</th><th>Bookings</th><th>Deposits</th></tr>
+    {% for s in top_services %}
+    <tr><td>{{ s['name'] }}</td><td>{{ s['n'] }}</td><td>{{ s['deposits'] | ghs }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Top customers</h2>
+  {% if top_customers %}
+  <table class="report-table">
+    <tr><th>Customer</th><th>Phone</th><th>Bookings</th></tr>
+    {% for c in top_customers %}
+    <tr><td>{{ c['customer_name'] }}</td><td>{{ c['customer_phone'] }}</td><td>{{ c['n'] }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Your data</h2>
+  <p class="muted small">Download everything — it's your business's data.</p>
+  <div class="cta">
+    <a class="btn" href="/dashboard/export/bookings.csv">⬇ Bookings (CSV)</a>
+    <a class="btn" href="/dashboard/export/customers.csv">⬇ Customers (CSV)</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Log in — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Log in</h1>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/login">
+    <label>Phone number
+      <input name="phone" required inputmode="tel" placeholder="0241234567">
+    </label>
+    <label>Password
+      <input name="password" type="password" required>
+    </label>
+    <button class="btn btn-primary wide" type="submit">Log in</button>
+  </form>
+  <p class="small">New here? <a href="/signup">Create your booking page</a></p>
+</div>
+{% endblock %}

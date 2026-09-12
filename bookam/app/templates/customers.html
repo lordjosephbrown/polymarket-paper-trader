@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Customers — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Customers</h1>
+  {% if customers %}
+  <ul class="customers">
+    {% for c in customers %}
+    <li class="customer">
+      <div>
+        <strong>{{ c['customer_name'] }}</strong> · <a href="tel:{{ c['customer_phone'] }}">{{ c['customer_phone'] }}</a><br>
+        <span class="muted small">{{ c['visits'] }} booking{{ 's' if c['visits'] != 1 }} · last: {{ c['last_visit'] }}{% if c['no_shows'] %} · <span class="warn-text">{{ c['no_shows'] }} no-show{{ 's' if c['no_shows'] != 1 }}</span>{% endif %}</span>
+      </div>
+      <a class="btn btn-small" href="https://wa.me/{{ c['customer_phone'] | replace('+', '') }}" target="_blank">WhatsApp</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Your customers will appear here after their first booking.</p>
+  {% endif %}
+</div>
+{% endblock %}
