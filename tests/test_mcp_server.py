@@ -1000,3 +1000,44 @@ class TestAccountValidation:
     def test_cancel_order_traversal(self):
         result = _parse(cancel_order(1, account="../evil"))
         assert result["ok"] is False
+
+
+class TestSdkCompat:
+    """The server works with both mcp 1.x (FastMCP) and mcp 2.x (MCPServer)."""
+
+    def test_falls_back_to_fastmcp_when_mcpserver_is_missing(self, monkeypatch):
+        import importlib
+        import sys
+        import types
+
+        fake = types.ModuleType("mcp.server.fastmcp")
+
+        class FastMCP:
+            def __init__(self, name: str, **kwargs) -> None:
+                self.name = name
+                self.tools: list[str] = []
+
+            def tool(self):
+                def decorator(fn):
+                    self.tools.append(fn.__name__)
+                    return fn
+
+                return decorator
+
+            def run(self, *args, **kwargs) -> None:
+                self.ran = True
+
+        fake.FastMCP = FastMCP
+        monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", None)
+        monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fake)
+        try:
+            reloaded = importlib.reload(mcp_server)
+            assert isinstance(reloaded.mcp, FastMCP)
+            assert reloaded.mcp.name == "pm-trader"
+            assert {"buy", "sell", "portfolio", "init_account"} <= set(reloaded.mcp.tools)
+            reloaded.main()
+            assert reloaded.mcp.ran
+        finally:
+            monkeypatch.undo()
+            importlib.reload(mcp_server)
+        assert not isinstance(mcp_server.mcp, FastMCP)
