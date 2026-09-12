@@ -12,15 +12,22 @@ Robinhood's option data comes in two halves keyed by instrument id:
 tool accepts. Both inputs may be a single page, a list of pages, a bare
 list of rows, or JSON text for any of those, so an agent can paste tool
 output straight through, one page after another.
+
+``chain_from_csv`` does the same join from two compact CSV tables
+(``id,expiry,strike,right`` and ``id,bid,ask,iv,delta,open_interest,volume``).
+That is the cheapest hand-off for an agent that has to re-type the data:
+a few dozen characters per contract instead of the full payload objects.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from datetime import date
 from typing import Any
 
-from thetadesk.models import InvalidChainError, parse_date, today_utc
+from thetadesk.models import InvalidChainError, normalize_right, parse_date, today_utc
 
 _INSTRUMENT_LIST_KEYS = ("instruments", "results", "items")
 _QUOTE_LIST_KEYS = ("results", "quotes", "items")
@@ -159,4 +166,116 @@ def build_chain(
     return chain
 
 
-__all__ = ["build_chain", "spot_from_equity_quotes"]
+# ---------------------------------------------------------------------------
+# Compact CSV input
+# ---------------------------------------------------------------------------
+
+_CSV_COLUMNS: dict[str, tuple[str, ...]] = {
+    "id": ("id", "instrument_id", "prefix"),
+    "expiry": ("expiry", "expiration_date", "expiration"),
+    "strike": ("strike", "strike_price"),
+    "right": ("right", "type"),
+    "bid": ("bid", "bid_price"),
+    "ask": ("ask", "ask_price"),
+    "mark": ("mark", "mark_price"),
+    "iv": ("iv", "implied_volatility"),
+    "delta": ("delta",),
+    "open_interest": ("open_interest", "oi"),
+    "volume": ("volume", "vol"),
+}
+_CONTRACT_COLUMNS = ("id", "expiry", "strike", "right")
+_QUOTE_COLUMNS = ("id", "bid", "ask")
+
+
+def _to_int(value: Any) -> int:
+    number = _to_float(value)
+    return int(number) if number is not None else 0
+
+
+def _csv_rows(text: str, required: tuple[str, ...], what: str) -> list[dict[str, str]]:
+    """Parse CSV text into rows keyed by canonical column names.
+
+    Header names are matched case-insensitively against the canonical names
+    and their Robinhood aliases. Rows without an id are skipped.
+    """
+    reader = csv.DictReader(io.StringIO(str(text).strip()))
+    header = {str(name).strip().lower(): name for name in (reader.fieldnames or []) if name}
+    columns: dict[str, str] = {}
+    for canonical, names in _CSV_COLUMNS.items():
+        for name in names:
+            if name in header:
+                columns[canonical] = header[name]
+                break
+    missing = [c for c in required if c not in columns]
+    if missing:
+        raise InvalidChainError(f"{what} CSV is missing columns: {', '.join(missing)}")
+    rows: list[dict[str, str]] = []
+    for raw in reader:
+        row = {canonical: str(raw.get(col) or "").strip() for canonical, col in columns.items()}
+        if row["id"]:
+            rows.append(row)
+    return rows
+
+
+def _resolve_id(ident: str, ids: list[str]) -> str:
+    """Map a quote id (a full id or a unique prefix) to a contract id."""
+    if ident in ids:
+        return ident
+    matches = [full for full in ids if full.startswith(ident)]
+    if len(matches) > 1:
+        raise InvalidChainError(f"Quote id {ident!r} matches {len(matches)} contracts; use a longer prefix")
+    return matches[0] if matches else ident
+
+
+def chain_from_csv(
+    underlying: str,
+    spot: Any,
+    contracts_csv: str,
+    quotes_csv: str,
+    as_of: date | str | None = None,
+    earnings_date: date | str | None = None,
+    iv_rank: float | None = None,
+) -> dict:
+    """Build a chain from two compact CSV tables instead of raw payloads.
+
+    ``contracts_csv`` columns: ``id,expiry,strike,right``.
+    ``quotes_csv`` columns: ``id,bid,ask[,iv,delta,open_interest,volume,mark]``,
+    where ``id`` may be a unique prefix of the contract id (the first eight
+    characters of a Robinhood instrument id are enough in practice).
+    Robinhood field names are accepted as column aliases. ``spot`` is a
+    number or the ``get_equity_quotes`` payload, as for ``build_chain``.
+    """
+    instruments: list[dict] = []
+    for row in _csv_rows(contracts_csv, _CONTRACT_COLUMNS, "contracts"):
+        strike = _to_float(row["strike"])
+        if strike is None or strike <= 0:
+            raise InvalidChainError(f"Invalid strike {row['strike']!r} for contract {row['id']}")
+        instruments.append(
+            {
+                "id": row["id"],
+                "expiration_date": parse_date(row["expiry"]).isoformat(),
+                "strike_price": strike,
+                "type": normalize_right(row["right"]),
+            }
+        )
+    ids = [row["id"] for row in instruments]
+    quotes = [
+        {
+            "instrument_id": _resolve_id(row["id"], ids),
+            "bid_price": row["bid"],
+            "ask_price": row["ask"],
+            "mark_price": row.get("mark") or None,
+            "implied_volatility": row.get("iv") or None,
+            "delta": row.get("delta") or None,
+            "open_interest": _to_int(row.get("open_interest")),
+            "volume": _to_int(row.get("volume")),
+        }
+        for row in _csv_rows(quotes_csv, _QUOTE_COLUMNS, "quotes")
+    ]
+    return build_chain(
+        underlying, spot, instruments, quotes,
+        as_of=as_of, earnings_date=earnings_date, iv_rank=iv_rank,
+    )
+
+
+__all__ = ["build_chain", "chain_from_csv", "spot_from_equity_quotes"]
