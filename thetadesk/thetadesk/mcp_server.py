@@ -30,6 +30,7 @@ from thetadesk.models import (
     to_jsonable,
 )
 from thetadesk.robinhood import build_chain
+from thetadesk.robinhood import chain_from_csv as _chain_from_csv
 from thetadesk.rules import ManagementRules
 from thetadesk.scanner import ScanFilters, size_position
 
@@ -180,7 +181,8 @@ def chain_format() -> str:
         "Rows without any price (bid/ask/mark) are skipped and counted in skipped_rows.",
         "Pass one chain object, or a list of chain objects, or the same as a JSON string.",
         "Robinhood users: pass get_option_instruments and get_option_quotes output to "
-        "chain_from_robinhood instead of reshaping by hand.",
+        "chain_from_robinhood instead of reshaping by hand, or re-type only the columns "
+        "that matter as two small CSV tables and call chain_from_csv (far fewer tokens).",
     ]
     return _ok({"example": example, "notes": notes})
 
@@ -206,6 +208,35 @@ def chain_from_robinhood(
         return _ok(
             build_chain(
                 underlying, spot, instruments, quotes,
+                as_of=as_of, earnings_date=earnings_date, iv_rank=iv_rank,
+            )
+        )
+    except Exception as e:
+        return _err_from(e)
+
+
+@mcp.tool()
+def chain_from_csv(
+    underlying: str,
+    spot: float | dict | str,
+    contracts_csv: str,
+    quotes_csv: str,
+    as_of: str | None = None,
+    earnings_date: str | None = None,
+    iv_rank: float | None = None,
+) -> str:
+    """Build a chain from two compact CSV tables: the cheapest way to hand over Robinhood data.
+
+    contracts_csv columns: id,expiry,strike,right. quotes_csv columns:
+    id,bid,ask[,iv,delta,open_interest,volume]; id may be a unique prefix of
+    the contract id (the first 8 characters are enough). spot: a number or the
+    get_equity_quotes payload for the underlying. Robinhood field names are
+    accepted as column aliases.
+    """
+    try:
+        return _ok(
+            _chain_from_csv(
+                underlying, spot, contracts_csv, quotes_csv,
                 as_of=as_of, earnings_date=earnings_date, iv_rank=iv_rank,
             )
         )

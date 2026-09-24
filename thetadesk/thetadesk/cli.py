@@ -20,7 +20,7 @@ from thetadesk.models import (
     parse_date,
     to_jsonable,
 )
-from thetadesk.robinhood import build_chain
+from thetadesk.robinhood import build_chain, chain_from_csv
 from thetadesk.rules import ManagementRules
 from thetadesk.scanner import FILLS, SORT_KEYS, ScanFilters
 
@@ -61,6 +61,21 @@ def _desk(ctx: click.Context) -> Desk:
 
 def _load_chains(paths: tuple[str, ...]) -> list[Chain]:
     return [load_chain_file(p) for p in paths]
+
+
+def _spot_arg(spot: str) -> object:
+    """A spot option is a number, or the path of a get_equity_quotes JSON file."""
+    return Path(spot).read_text() if Path(spot).is_file() else spot
+
+
+def _emit_chain(chain: dict, out: Path | None) -> None:
+    """Write a built chain to ``out`` (reporting a summary) or print it."""
+    text = json.dumps(chain, indent=1)
+    if out is not None:
+        out.write_text(text + "\n")
+        click.echo(_ok({"written": str(out), "options": len(chain["options"]), "unmatched": chain["unmatched"]}))
+    else:
+        click.echo(text)
 
 
 def _run(ctx: click.Context, fn, raw: bool = False) -> None:
@@ -213,10 +228,9 @@ def scan(ctx: click.Context, chains: tuple[str, ...], limit: int, sort: str, **k
 def chain_from_robinhood(underlying: str, spot: str, instrument_files: tuple[str, ...], quote_files: tuple[str, ...], as_of: str | None, earnings: str | None, iv_rank: float | None, out: Path | None) -> None:
     """Join Robinhood contract and quote payloads into a chain file."""
     try:
-        spot_value: object = Path(spot).read_text() if Path(spot).is_file() else spot
         chain = build_chain(
             underlying,
-            spot_value,
+            _spot_arg(spot),
             [Path(f).read_text() for f in instrument_files],
             [Path(f).read_text() for f in quote_files],
             as_of=as_of,
@@ -225,12 +239,33 @@ def chain_from_robinhood(underlying: str, spot: str, instrument_files: tuple[str
         )
     except DeskError as e:
         _fail(e)
-    text = json.dumps(chain, indent=1)
-    if out is not None:
-        out.write_text(text + "\n")
-        click.echo(_ok({"written": str(out), "options": len(chain["options"]), "unmatched": chain["unmatched"]}))
-    else:
-        click.echo(text)
+    _emit_chain(chain, out)
+
+
+@main.command("chain-from-csv")
+@click.option("--underlying", required=True, help="Ticker, e.g. NBIS")
+@click.option("--spot", required=True, help="Spot price, or a JSON file of get_equity_quotes output.")
+@click.option("--contracts", "contracts_file", required=True, type=click.Path(exists=True, dir_okay=False), help="CSV with columns id,expiry,strike,right.")
+@click.option("--quotes", "quotes_file", required=True, type=click.Path(exists=True, dir_okay=False), help="CSV with columns id,bid,ask[,iv,delta,open_interest,volume]; id may be a unique prefix.")
+@click.option("--as-of", default=None, help="Quote date YYYY-MM-DD (default: today).")
+@click.option("--earnings", default=None, help="Next earnings date YYYY-MM-DD.")
+@click.option("--iv-rank", type=float, default=None)
+@click.option("--out", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write the chain here instead of stdout.")
+def chain_from_csv_cmd(underlying: str, spot: str, contracts_file: str, quotes_file: str, as_of: str | None, earnings: str | None, iv_rank: float | None, out: Path | None) -> None:
+    """Build a chain from compact contract and quote CSV files."""
+    try:
+        chain = chain_from_csv(
+            underlying,
+            _spot_arg(spot),
+            Path(contracts_file).read_text(),
+            Path(quotes_file).read_text(),
+            as_of=as_of,
+            earnings_date=earnings,
+            iv_rank=iv_rank,
+        )
+    except DeskError as e:
+        _fail(e)
+    _emit_chain(chain, out)
 
 
 @main.command()

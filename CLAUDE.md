@@ -101,3 +101,11 @@ mcp_server.py → engine.py (trading tools, 30 MCP tools)
 - `thetadesk/` — options premium-selling paper desk (CLI + MCP server). Self-contained: own
   `pyproject.toml`, README, and tests. Run its suite with `cd thetadesk && python3 -m pytest -q`.
   Nothing in `pm_trader` depends on it.
+- `.claude/skills/theta-daily/SKILL.md` — the unattended daily thetadesk routine (read-only
+  Robinhood data → `thetadesk chain-from-csv` → manage → scan/sell by fixed rules → report). It
+  commits the paper ledger, chain snapshots and reports to the `theta-journal` branch; never
+  merge that branch into `main`.
+- `.claude/settings.json` is tracked on purpose (not ignored). The owner creates it by copying
+  `thetadesk/examples/claude-settings.example.json`: it pre-approves the read-only Robinhood
+  market-data tools and denies every order, account, position and mutation tool, which is what
+  lets the scheduled run work unattended. Agents must not write that file themselves.

@@ -113,6 +113,14 @@ class TestResearchTools:
         assert report["returned"] == 1
         assert err(mcp_server.chain_from_robinhood("HOOD", 0, instruments, quotes)) == "INVALID_CHAIN"
 
+    def test_chain_from_csv(self):
+        contracts = "id,expiry,strike,right\n53480429-af13-485b-84c5-ed1b71070b28,2026-10-16,100,put\n"
+        quotes = "id,bid,ask,iv,delta,open_interest,volume\n53480429,2.77,3.05,0.59,-0.22,4606,1783\n"
+        data = ok(mcp_server.chain_from_csv("hood", "112.57", contracts, quotes, as_of="2026-09-12", earnings_date="2026-11-04"))
+        assert data["underlying"] == "HOOD" and data["options"][0]["open_interest"] == 4606 and data["unmatched"]["contracts_without_quotes"] == 0
+        assert ok(mcp_server.scan_chains(data))["returned"] == 1
+        assert err(mcp_server.chain_from_csv("HOOD", 112.57, contracts, "id,bid\n53480429,1\n")) == "INVALID_CHAIN"
+
     def test_scan_forms(self, chain_dict):
         as_dict = ok(mcp_server.scan_chains(chain_dict, limit=3))
         as_list = ok(mcp_server.scan_chains([chain_dict], limit=3))
