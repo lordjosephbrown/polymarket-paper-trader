@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Booking confirmed — Bookam{% endblock %}
+{% block content %}
+{% if booking['status'] in ('confirmed', 'on_the_way', 'in_progress') %}
+<meta http-equiv="refresh" content="30">
+{% endif %}
+<div class="card narrow center">
+  {% if booking['status'] == 'cancelled' %}
+  <h1>Cancelled</h1>
+  {% elif booking['status'] == 'completed' %}
+  <h1>🌟 Completed</h1>
+  {% else %}
+  <h1>✅ Booked!</h1>
+  {% endif %}
+
+  {% if booking['status'] != 'cancelled' %}
+  <div class="tracker">
+    {% set steps = [('confirmed', 'Booked'), ('on_the_way', 'On the way'), ('in_progress', 'In progress'), ('completed', 'Done')] %}
+    {% set order = {'confirmed': 0, 'on_the_way': 1, 'in_progress': 2, 'completed': 3, 'no_show': 0} %}
+    {% set current = order.get(booking['status'], 0) %}
+    {% for key, label in steps %}
+    {% if not (key == 'on_the_way' and booking['venue'] != 'customer') %}
+    <span class="tracker-step {{ 'done' if order[key] <= current else '' }}">{{ label }}</span>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+  <p class="big">{{ booking['date'] }} at <strong>{{ booking['start_time'] }}</strong></p>
+  <p>{{ booking['service_name'] }} with <strong>{{ business['name'] }}</strong>{% if staff_name %} ({{ staff_name }}){% endif %}{% if business['location'] %} · {{ business['location'] }}{% endif %}</p>
+  {% if booking['venue'] == 'customer' %}
+  <p>🏠 They'll come to you: <strong>{{ booking['customer_address'] }}</strong></p>
+  {% endif %}
+  <div class="receipt">
+    {% if booking['travel_fee_ghs'] %}
+    <div class="muted small"><span>Includes travel fee</span><span>{{ booking['travel_fee_ghs'] | ghs }}</span></div>
+    {% endif %}
+    <div><span>Deposit paid</span><span>{{ booking['deposit_ghs'] | ghs }}</span></div>
+    <div><span>Balance at appointment</span><span>{{ balance | ghs }}</span></div>
+    <div class="muted small"><span>Reference</span><span>{{ booking['payment_ref'] }}</span></div>
+  </div>
+  <p class="small muted">Show this page when you arrive. Save the link — it's your receipt.</p>
+  <a class="btn btn-primary" href="https://wa.me/{{ business['phone'] | replace('+', '') }}?text={{ ('Hi ' ~ business['name'] ~ ', I just booked ' ~ booking['service_name'] ~ ' for ' ~ booking['date'] ~ ' at ' ~ booking['start_time'] ~ '. My reference is ' ~ booking['payment_ref'] ~ '.') | urlquote }}">Message {{ business['name'] }} on WhatsApp</a>
+  {% if booking['status'] == 'confirmed' %}
+  <form method="post" action="/booking/{{ booking['payment_ref'] }}/cancel" style="margin-top:12px">
+    <button class="btn btn-small btn-warn" onclick="return confirm('Cancel this booking? Your deposit is not refunded automatically.')">Cancel booking</button>
+  </form>
+  {% endif %}
+
+  {% if booking['status'] == 'completed' %}
+  {% if review %}
+  <p class="muted">You rated this {{ '⭐' * review['rating'] }}{% if review['comment'] %} — “{{ review['comment'] }}”{% endif %}. Thank you!</p>
+  {% else %}
+  <form method="post" action="/booking/{{ booking['payment_ref'] }}/review" style="margin-top:12px">
+    <label>How was it?
+      <select name="rating">
+        <option value="5">⭐⭐⭐⭐⭐ Excellent</option>
+        <option value="4">⭐⭐⭐⭐ Good</option>
+        <option value="3">⭐⭐⭐ Okay</option>
+        <option value="2">⭐⭐ Poor</option>
+        <option value="1">⭐ Bad</option>
+      </select>
+    </label>
+    <label>Comment (optional)
+      <input name="comment" maxlength="300" placeholder="Say a little more…">
+    </label>
+    <button class="btn btn-primary" type="submit">Submit rating</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

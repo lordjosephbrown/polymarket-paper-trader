@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+{% if welcome %}
+<div class="card highlight">
+  <h2>🎉 You're live!</h2>
+  <p>Next steps: <a href="/dashboard/services">add your services</a> (with deposit amounts), check your <a href="/dashboard/hours">working hours</a>, then share your booking link below.</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Your booking link</h2>
+  <p class="booking-link"><a href="{{ booking_url }}">{{ booking_url }}</a></p>
+  <div class="cta">
+    <a class="btn btn-primary" href="https://wa.me/?text={{ ('Book your appointment with ' ~ business['name'] ~ ' here 👉 ' ~ booking_url) | urlquote }}" target="_blank">Share on WhatsApp</a>
+    <button class="btn btn-ghost" onclick="navigator.clipboard.writeText('{{ booking_url }}'); this.textContent='Copied!'">Copy link</button>
+  </div>
+  {% if wa_deep_link %}
+  <p class="small muted">Customers can also book entirely inside WhatsApp: share <a href="{{ wa_deep_link }}">this WhatsApp link</a> — it starts a chat that walks them through booking and takes the deposit by MoMo prompt.</p>
+  {% endif %}
+</div>
+
+<div class="stats-row">
+  <div class="stat"><span class="stat-num">{{ stats['total'] }}</span><span class="stat-label">Bookings</span></div>
+  <div class="stat"><span class="stat-num">{{ stats['deposits'] | ghs }}</span><span class="stat-label">Deposits collected</span></div>
+  <div class="stat"><span class="stat-num">{{ stats['no_shows'] }}</span><span class="stat-label">No-shows</span></div>
+</div>
+
+<div class="card">
+  <h2>Today ({{ today }})</h2>
+  {% if todays %}
+  <ul class="bookings">
+    {% for b in todays %}
+    <li class="booking status-{{ b['status'] }}">
+      <div class="booking-main">
+        <strong>{{ b['start_time'] }}–{{ b['end_time'] }}</strong> · {{ b['service_name'] }}{% if b['staff_name'] %} · <span class="badge">{{ b['staff_name'] }}</span>{% endif %}<br>
+        <span>{{ b['customer_name'] }} · <a href="tel:{{ b['customer_phone'] }}">{{ b['customer_phone'] }}</a></span>
+        {% if b['venue'] == 'customer' %}<br><span class="small">🏠 {{ b['customer_address'] }}</span>{% endif %}
+        <span class="badge">{{ b['status'].replace('_', ' ') }}</span>
+        <span class="badge badge-money">{{ b['deposit_ghs'] | ghs }} deposit</span>
+      </div>
+      {% if b['status'] in ('confirmed', 'on_the_way', 'in_progress') %}
+      <div class="booking-actions">
+        {% if b['status'] == 'confirmed' and b['venue'] == 'customer' %}
+        <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+          <input type="hidden" name="status" value="on_the_way">
+          <button class="btn btn-small">🚗 On my way</button>
+        </form>
+        {% endif %}
+        {% if b['status'] in ('confirmed', 'on_the_way') %}
+        <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+          <input type="hidden" name="status" value="in_progress">
+          <button class="btn btn-small">▶ Start</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+          <input type="hidden" name="status" value="completed">
+          <button class="btn btn-small">✓ Done</button>
+        </form>
+        {% if b['status'] == 'confirmed' %}
+        <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+          <input type="hidden" name="status" value="no_show">
+          <button class="btn btn-small btn-warn">No-show</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No bookings today yet. Share your link to fill your calendar.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Upcoming</h2>
+  {% if upcoming %}
+  <ul class="bookings">
+    {% for b in upcoming %}
+    <li class="booking">
+      <div class="booking-main">
+        <strong>{{ b['date'] }} · {{ b['start_time'] }}</strong> · {{ b['service_name'] }}<br>
+        <span>{{ b['customer_name'] }} · {{ b['customer_phone'] }}</span>
+        {% if b['venue'] == 'customer' %}<br><span class="small">🏠 {{ b['customer_address'] }}</span>{% endif %}
+        <details class="small" style="margin-top:6px">
+          <summary>Change / cancel</summary>
+          <form method="post" action="/dashboard/bookings/{{ b['id'] }}/reschedule" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:8px 0">
+            <input type="date" name="date" value="{{ b['date'] }}" min="{{ today }}" required style="width:auto; margin:0">
+            <input type="time" name="start_time" value="{{ b['start_time'] }}" required style="width:auto; margin:0">
+            <button class="btn btn-small">Move &amp; notify customer</button>
+          </form>
+          <form method="post" action="/dashboard/bookings/{{ b['id'] }}/status" class="inline">
+            <input type="hidden" name="status" value="cancelled">
+            <button class="btn btn-small btn-warn" onclick="return confirm('Cancel this booking? The customer will be notified and expects their GH₵{{ b['deposit_ghs'] }} deposit back.')">Cancel booking</button>
+          </form>
+        </details>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Nothing upcoming yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

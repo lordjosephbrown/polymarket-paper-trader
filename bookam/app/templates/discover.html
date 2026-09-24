@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Find a business — Bookam{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Find &amp; book a business</h1>
+  <form method="get" action="/discover">
+    <label>Search by name, service type, or area
+      <input name="q" value="{{ q }}" placeholder="e.g. braids, Osu, barber…">
+    </label>
+    <button class="btn btn-primary" type="submit">Search</button>
+  </form>
+</div>
+
+{% if businesses %}
+<ul class="services">
+  {% for b in businesses %}
+  <li class="service card" style="margin:10px 0">
+    <div>
+      <strong>{{ b['name'] }}</strong><br>
+      <span class="muted small">{% if b['avg_rating'] %}⭐ {{ b['avg_rating'] }} ({{ b['review_count'] }}) · {% endif %}{{ category_labels.get(b['category'], b['category']) }}{% if b['areas'] %} · 📍 {{ b['areas'] }}{% endif %} · {{ b['service_count'] }} service{{ 's' if b['service_count'] != 1 }}</span>
+    </div>
+    <a class="btn btn-primary btn-small" href="/b/{{ b['slug'] }}">Book</a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="card center">
+  <p class="muted">No businesses found{% if q %} for “{{ q }}”{% endif %}. Try a different search.</p>
+</div>
+{% endif %}
+
+<div class="card center">
+  <p>Run a business? <a href="/signup">Get your own booking page free</a>.</p>
+</div>
+{% endblock %}

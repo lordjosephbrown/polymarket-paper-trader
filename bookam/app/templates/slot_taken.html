@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Slot taken — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow center">
+  <h1>😔 That slot was just taken</h1>
+  <p>Someone booked it before you finished. Please pick another time.</p>
+  <a class="btn btn-primary" href="/b/{{ business['slug'] }}">Choose another slot</a>
+</div>
+{% endblock %}

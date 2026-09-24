@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Payment failed — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow center">
+  <h1>Payment didn't go through</h1>
+  <p>Your deposit wasn't charged and the slot wasn't booked. Please try again.</p>
+  <a class="btn btn-primary" href="/b/{{ business['slug'] }}">Try again</a>
+</div>
+{% endblock %}

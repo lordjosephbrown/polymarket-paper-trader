@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Team — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Your team</h1>
+  <p class="muted small">With team members added, a branch can take as many bookings at the same time as it has people, and customers can ask for their favourite. No team = solo mode (one booking at a time).</p>
+  {% if members %}
+  <ul class="services">
+    {% for m in members %}
+    <li class="service">
+      <div>
+        <strong>{{ m['name'] }}</strong><br>
+        <span class="muted small">{{ m['location_name'] }}</span>
+      </div>
+      <form method="post" action="/dashboard/staff/{{ m['id'] }}/delete" class="inline">
+        <button class="btn btn-small btn-warn" onclick="return confirm('Remove {{ m['name'] }}? Their existing bookings stay on the calendar.')">Remove</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No team members yet — you're in solo mode.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Add a team member</h2>
+  <form method="post" action="/dashboard/staff">
+    <label>Name
+      <input name="name" required maxlength="80" placeholder="e.g. Efua">
+    </label>
+    <label>Works at
+      <select name="location_id">
+        {% for l in locations %}
+        <option value="{{ l['id'] }}">{{ l['name'] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-primary wide" type="submit">Add team member</button>
+  </form>
+</div>
+{% endblock %}

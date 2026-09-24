@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Customer updates — Bookam{% endblock %}
+{% block nav %}{% include "_dashnav.html" %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Send an update to your customers</h1>
+  <p class="muted small">New service? New prices? Moved shops? Closed for a holiday? Tell everyone who has ever booked with you — it goes out on WhatsApp to <strong>{{ reach }}</strong> customer{{ 's' if reach != 1 }}. One update per day.</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/dashboard/updates">
+    <label>Your update (max 500 characters)
+      <textarea name="message" maxlength="500" rows="4" placeholder="e.g. New service alert! We now do pedicures — GH₵80. Book your slot 💅" style="width:100%; padding:10px 12px; font-size:1rem; border:1px solid var(--border); border-radius:8px; font-family:inherit"></textarea>
+    </label>
+    <button class="btn btn-primary wide" type="submit" onclick="return confirm('Send this update to {{ reach }} customer(s) on WhatsApp?')">Send update</button>
+  </form>
+</div>
+
+{% if recent %}
+<div class="card">
+  <h2>Recent updates</h2>
+  <ul class="services">
+    {% for b in recent %}
+    <li class="service">
+      <div>
+        {{ b['message'] }}<br>
+        <span class="muted small">Sent to {{ b['sent_count'] }} customer{{ 's' if b['sent_count'] != 1 }} · {{ b['created_at'][:10] }}</span>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Sign up — Bookam{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Create your booking page</h1>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/signup">
+    <label>Business name
+      <input name="name" required maxlength="80" placeholder="e.g. Adjoa's Beauty Bar" value="{{ form.get('name', '') }}">
+    </label>
+    <label>Phone number (this is your login)
+      <input name="phone" required inputmode="tel" placeholder="0241234567" value="{{ form.get('phone', '') }}">
+    </label>
+    <label>Password
+      <input name="password" type="password" required minlength="6" placeholder="At least 6 characters">
+    </label>
+    <label>What do you do?
+      <select name="category">
+        {% for value, label in categories %}
+        <option value="{{ value }}" {% if form.get('category') == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Location (area, city)
+      <input name="location" maxlength="120" placeholder="e.g. Osu, Accra" value="{{ form.get('location', '') }}">
+    </label>
+    <button class="btn btn-primary wide" type="submit">Create my page</button>
+  </form>
+  <p class="small">Already have an account? <a href="/login">Log in</a></p>
+</div>
+{% endblock %}
